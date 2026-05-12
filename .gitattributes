@@ -1,0 +1,36 @@
+# .gitattributes
+# ===============
+# Normalizar line endings a LF en el repositorio para consistencia entre
+# sistemas operativos (Windows usa CRLF por defecto, Linux/macOS usa LF).
+# Esto evita diffs fantasma y advertencias de linters al colaborar en equipo.
+
+# Regla general: detectar tipo de archivo y normalizar automáticamente.
+* text=auto
+
+# Forzar LF para todos los archivos de texto del proyecto.
+*.py    text eol=lf
+*.txt   text eol=lf
+*.md    text eol=lf
+*.cfg   text eol=lf
+*.ini   text eol=lf
+*.toml  text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.json  text eol=lf
+*.sh    text eol=lf
+*.ps1   text eol=crlf
+
+# Archivos binarios: no tocar los line endings.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.svg   binary
+*.ico   binary
+*.wav   binary
+*.ogg   binary
+*.mp3   binary
+*.pyc   binary
+*.pyd   binary
+*.dll   binary
+*.exe   binary

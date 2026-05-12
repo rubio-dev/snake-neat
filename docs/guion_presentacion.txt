@@ -1,0 +1,162 @@
+================================================================================
+        GUION DE PRESENTACION — Snake AI con NEAT
+        Duracion estimada: 5 minutos
+================================================================================
+
+ANTES DE EMPEZAR
+  · Tener el programa corriendo: python src/snake_ai/ai_multiprocessing.py
+  · La ventana de 1280x720 debe estar visible y simulando
+  · Si Graphviz esta instalado, probarlo antes para que no falle en vivo
+
+================================================================================
+[0:00] APERTURA  (~30 seg)
+================================================================================
+
+  "Este proyecto entrena una inteligencia artificial para jugar Snake
+  de forma autonoma. No le programamos reglas — nadie le dijo que hacer
+  si hay una pared enfrente o donde esta la comida. La IA descubrio
+  esas estrategias sola, a traves de 6,300 generaciones de evolucion."
+
+  *(Senalar la ventana con la simulacion corriendo)*
+
+  "Lo que ven aqui es la serpiente siendo controlada por la red neuronal
+  del mejor genoma de la generacion actual, jugando en tiempo real."
+
+================================================================================
+[0:30] QUE ES NEAT  (~1 min)
+================================================================================
+
+  "El algoritmo que usamos se llama NEAT — NeuroEvolution of Augmenting
+  Topologies. A diferencia del deep learning clasico, NEAT no usa
+  backpropagation ni necesita un dataset con respuestas correctas.
+  En cambio, evoluciona las redes neuronales igual que la seleccion natural."
+
+  "Cada generacion funciona asi:
+
+    1. Partimos de 200 serpientes, cada una con su propia red neuronal.
+    2. Cada serpiente juega 10 partidas de Snake.
+    3. Calculamos un puntaje — llamado fitness — segun que tan bien jugo.
+    4. Las mejores se reproducen: sus redes se mezclan y mutan.
+    5. Eso genera 200 nuevas serpientes para la siguiente generacion."
+
+  *(Senalar el panel derecho de la GUI — numero de generacion y especies)*
+
+  "En este momento llevamos la generacion [DECIR EL NUMERO QUE MUESTRA LA GUI].
+  NEAT tambien agrupa las redes similares en 'especies' para proteger
+  mutaciones nuevas antes de eliminarlas — aqui podemos ver cuantas
+  especies activas hay en este momento."
+
+================================================================================
+[1:30] COMO VE LA SERPIENTE  (~1 min)
+================================================================================
+
+  *(Senalar la serpiente en el panel izquierdo)*
+
+  "La serpiente no ve el tablero completo. Lanza 4 rayos desde su cabeza
+  en las 4 direcciones cardinales — Norte, Sur, Este, Oeste — usando
+  el Algoritmo de Bresenham para trazar cada linea celda por celda."
+
+  "Por cada rayo, la red recibe dos numeros:
+
+    · Proximidad al obstaculo: va de 0.0 (nada cerca) a 1.0 (pared
+      a la siguiente celda). Se calcula como:
+        1.0 - (distancia_al_obstaculo / diagonal_del_tablero)
+
+    · Flag de comida: simplemente 1.0 si hay comida en esa direccion
+      antes de un obstaculo, 0.0 si no."
+
+  "Ademas recibe 4 valores de distancia a cada pared, y un vector (dx, dy)
+  que apunta directamente hacia donde esta la comida en el tablero.
+  Todo junto forma un vector de 14 numeros que entra a la red neuronal.
+  La red devuelve 4 numeros — uno por direccion — y la serpiente se mueve
+  hacia el mas alto."
+
+================================================================================
+[2:30] COMO APRENDE — FUNCION DE FITNESS  (~45 seg)
+================================================================================
+
+  "La funcion de fitness es lo unico que le decimos a la IA sobre si
+  lo hizo bien o mal. Es muy directa:
+
+    fitness = promedio de (comida_comida x 500  +  pasos_vividos x 0.01)
+              sobre 10 partidas
+
+  500 puntos por fruta, 0.01 por paso sobrevivido. El ratio es intencional:
+  comer una sola fruta vale mas que sobrevivir 5,000 pasos sin comer.
+  Asi la serpiente aprende que el objetivo es la comida, no simplemente
+  no morir."
+
+  "Si no come nada en 400 pasos consecutivos, muere de hambre. Ese limite
+  existe para que no aprenda a dar vueltas en circulos sin avanzar — un
+  comportamiento que descubrimos en generaciones tempranas."
+
+================================================================================
+[3:15] DEMO EN VIVO  (~1 min)
+================================================================================
+
+  *(Senalar la grafica del panel derecho)*
+
+  "La linea verde de esta grafica es el mejor fitness registrado por
+  generacion. La linea amarilla es el promedio de toda la poblacion.
+  La brecha entre ambas nos dice que tan diversa esta siendo la evolucion."
+
+  *(Senalar el score de la partida en vivo)*
+
+  "En esta partida en vivo podemos ver el score actual y el record
+  historico que ha alcanzado la red en la simulacion visual."
+
+  *(Si Graphviz disponible — hacer clic en "Ver Red Neuronal")*
+
+  "Este boton genera la topologia actual de la red del mejor genoma.
+  Al inicio de la evolucion era solo 14 entradas conectadas directamente
+  a 4 salidas — sin ninguna neurona oculta. Con el tiempo, NEAT fue
+  agregando neuronas y conexiones nuevas en los puntos donde beneficiaban
+  al fitness. Lo que ven aqui es la arquitectura que la evolucion
+  diseno por si sola."
+
+================================================================================
+[4:15] CIERRE  (~45 seg)
+================================================================================
+
+  "Ninguno de los comportamientos que ven fue programado explicitamente.
+  La serpiente aprendio a evitar paredes, perseguir la comida, y manejar
+  su propio cuerpo largo — todo emergio de repetir el ciclo de evolucion
+  sobre millones de partidas."
+
+  "El reto tecnico mas importante fue un bug en el raycasting: las
+  distancias de obstaculos se inicializaban en cero, lo que hacia que
+  la serpiente 'viera peligro maximo' en direcciones completamente libres.
+  Eso hacia casi imposible el aprendizaje. Una vez corregido, el fitness
+  empezo a crecer de forma estable."
+
+  "El proyecto usa Python con neat-python para el algoritmo, Numba para
+  compilar el motor del juego a velocidad casi nativa, y Pygame para
+  la visualizacion en tiempo real que acaban de ver."
+
+================================================================================
+PREGUNTAS FRECUENTES — respuestas cortas
+================================================================================
+
+  P: "Por que no usaron Q-learning o algun RL clasico?"
+  R: NEAT no necesita definir una funcion de valor ni manejar espacios
+     de estado enormes. Solo necesita una puntuacion al final de cada
+     partida. Para Snake, donde el tablero tiene millones de estados
+     posibles, eso simplifica mucho el diseno.
+
+  P: "Cuanto tarda una generacion?"
+  R: Depende del hardware. Con multiprocessing en todos los nucleos,
+     cada generacion toma entre 10 y 30 segundos. 6,300 generaciones
+     representan varios dias de entrenamiento acumulado.
+
+  P: "Puede llegar a completar el tablero (ganar)?"
+  R: Tecnicamente si — el tablero es 40x40 = 1,600 celdas. Ningun
+     genoma lo ha logrado aun, pero el fitness sigue mejorando.
+
+  P: "Por que 4 rayos y no mas?"
+  R: Con 4 rayos el vector de entrada es de 14 valores. Aumentar a 8
+     rayos lo lleva a 22 valores y requiere reentrenar desde cero porque
+     los checkpoints existentes son incompatibles con ese tamano.
+
+================================================================================
+  Fin del guion  |  Snake AI con NEAT  |  Presentacion final mayo 2026
+================================================================================

@@ -1,0 +1,7 @@
+pygame-ce
+neat-python
+numpy
+numba
+graphviz
+matplotlib
+pygame-gui

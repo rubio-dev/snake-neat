@@ -1,0 +1,643 @@
+================================================================================
+        SNAKE AI CON NEAT — REPORTE DE PROYECTO FINAL
+        Entrenamiento de una IA para jugar Snake con Neuroevolución
+        Fecha: 07 de mayo de 2026  |  Revisión: v3 (Presentación)
+================================================================================
+
+TABLA DE CONTENIDO
+------------------
+  1. ¿De qué trata el proyecto?
+  2. ¿Qué es NEAT y por qué lo usamos?
+  3. ¿Cómo "ve" la serpiente el mundo? (Raycasting)
+  4. ¿Cómo aprende? (Función de fitness)
+  5. Arquitectura del sistema
+  6. Resultados y estado actual del entrenamiento
+  7. Guía para la demostración en vivo
+  8. Bugs importantes que resolvimos
+  9. Detalles técnicos (configuración NEAT y fórmulas)
+  10. Dependencias y cómo ejecutar
+
+================================================================================
+
+
+1. ¿DE QUÉ TRATA EL PROYECTO?
+================================================================================
+
+Entrenamos una inteligencia artificial para jugar Snake de forma autónoma.
+La IA no fue programada con reglas fijas ("si hay pared a la derecha, gira
+a la izquierda"). En cambio, aprende por sí sola a través de la EVOLUCIÓN
+de redes neuronales.
+
+  El tablero:   40×40 celdas con paredes en los bordes
+  La serpiente: empieza pequeña y crece al comer comida
+  El objetivo:  comer la mayor cantidad de comida sin morir
+
+  Causas de muerte:
+    · Chocar contra una pared o contra el propio cuerpo
+    · No comer nada durante 400 pasos seguidos (muere de hambre)
+
+  Condición de victoria: la serpiente llena TODO el tablero (1,600 celdas).
+
+  Lenguaje: Python 3.11+
+  Librería NEAT: neat-python
+  Motor del juego: Numba (compilación JIT, casi velocidad de C)
+  GUI: Pygame-CE
+
+
+2. ¿QUÉ ES NEAT Y POR QUÉ LO USAMOS?
+================================================================================
+
+NEAT = NeuroEvolution of Augmenting Topologies
+       (Stanley & Miikkulainen, 2002)
+
+NEAT es un algoritmo que EVOLUCIONA redes neuronales usando principios
+inspirados en la biología: selección natural, mutación y reproducción.
+
+La diferencia clave con el Deep Learning tradicional:
+
+  Deep Learning (backprop):            NEAT (evolución):
+  ──────────────────────────────────   ─────────────────────────────────
+  · Arquitectura fija de antemano      · La topología crece sola
+  · Necesita gradientes / etiquetas    · Solo necesita una puntuación
+  · Requiere millones de ejemplos      · Aprende por prueba y error
+  · Minimiza error cuadrático          · Maximiza una función de fitness
+
+¿Por qué NEAT para Snake?
+  Snake no tiene un "conjunto de entrenamiento" con respuestas correctas.
+  Solo podemos decirle a la IA qué tan BIEN le fue en una partida.
+  NEAT es perfecto para este tipo de problemas de refuerzo evolutivo.
+
+2.1 El ciclo evolutivo de NEAT
+--------------------------------
+
+  GENERACIÓN N
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │                                                                     │
+  │  200 genomas (redes neuronales)                                     │
+  │        ↓                                                            │
+  │  Cada genoma juega 10 partidas de Snake                             │
+  │        ↓                                                            │
+  │  Se calcula su FITNESS (puntuación promedio)                        │
+  │        ↓                                                            │
+  │  ESPECIACIÓN: agrupar genomas similares                             │
+  │        ↓                                                            │
+  │  Los mejores de cada especie se REPRODUCEN                          │
+  │    · Herencia de conexiones del padre y la madre                    │
+  │    · Mutación aleatoria de pesos, nodos y conexiones                │
+  │        ↓                                                            │
+  │  → Nueva población de 200 genomas → GENERACIÓN N+1                 │
+  │                                                                     │
+  └─────────────────────────────────────────────────────────────────────┘
+
+2.2 Especiación: proteger innovaciones
+-----------------------------------------
+
+Cuando un genoma muta una conexión nueva, al principio rinde MENOS que
+sus padres (porque aún no aprendió a usarla bien). Sin especiación, ese
+genoma sería eliminado antes de tener chance de mejorar.
+
+NEAT los agrupa en "especies" de genomas similares. Dentro de su especie,
+compiten solo entre ellos. Así las innovaciones tienen tiempo de madurar.
+
+  Distancia de compatibilidad:
+    δ = c₁·(E/N) + c₂·(D/N) + c₃·W̄
+
+    E = genes en exceso, D = genes disjuntos, N = tamaño del genoma mayor
+    W̄ = diferencia promedio de pesos en genes compartidos
+    c₁=c₂=1.0,  c₃=0.6,  umbral de especie = 3.0
+
+2.3 Configuración de la red neuronal
+--------------------------------------
+
+  Inicio de cada genoma:
+    · 14 entradas  →  0 neuronas ocultas  →  4 salidas
+    · Conexiones iniciales: 50% aleatorias (partial_direct 0.5)
+    · Activación: tanh (puede mutar a relu)
+
+  Las 4 salidas corresponden a: Derecha / Izquierda / Abajo / Arriba
+  La dirección elegida es la salida con el valor MÁS ALTO (argmax).
+
+  Con el tiempo, NEAT agrega neuronas y conexiones ocultas según
+  lo que beneficie al fitness.
+
+
+3. ¿CÓMO "VE" LA SERPIENTE EL MUNDO? (RAYCASTING)
+================================================================================
+
+La serpiente no ve el tablero completo. Ve el mundo mediante RAYOS
+lanzados desde su cabeza en 4 direcciones (N, E, S, O).
+
+  Vista top-down del tablero (ejemplo simplificado):
+
+          N
+          ↑
+          |  rayo Norte
+          |
+  ← ─────●───── →   ● = cabeza de la serpiente
+          |        E
+          |  rayo Sur
+          ↓
+          S
+
+  En la config actual: NUMBER_OF_RAYS = 4
+  Los rayos se distribuyen en 360° uniformemente: 0°, 90°, 180°, 270°
+
+3.1 ¿Qué detecta cada rayo?
+-----------------------------
+
+  Por cada rayo, la red neuronal recibe DOS valores:
+
+  a) PROXIMIDAD AL OBSTÁCULO  [0.0 a 1.0]
+     El rayo avanza celda por celda usando el Algoritmo de Bresenham.
+     Si encuentra una PARED o el CUERPO de la serpiente:
+
+       distancia_cruda = √((x_obs - x_cabeza)² + (y_obs - y_cabeza)²)
+       proximidad = 1.0 - (distancia_cruda / diagonal_tablero)
+       proximidad = clip(proximidad, 0.0, 1.0)
+
+       → 1.0 = obstáculo a 1 celda de distancia  (PELIGRO INMEDIATO)
+       → 0.0 = sin obstáculo en esa dirección     (sin peligro)
+
+  b) FLAG DE COMIDA  {0.0 ó 1.0}
+       → 1.0 si hay comida en esa dirección ANTES de un obstáculo
+       → 0.0 si no hay comida en esa dirección
+
+3.2 Inputs adicionales (configuración actual)
+----------------------------------------------
+
+  c) DISTANCIAS A PAREDES  [0.0 a 1.0]  (INCLUDE_WALL_DISTANCE = True)
+     Cuatro valores: izquierda, derecha, arriba, abajo.
+
+       dist_izq = head_x / grid_cols
+       dist_der = (grid_cols - 1 - head_x) / grid_cols
+       dist_arr = head_y / grid_rows
+       dist_aba = (grid_rows - 1 - head_y) / grid_rows
+
+  d) VECTOR HACIA LA COMIDA  [-1.0 a 1.0]  (siempre activo)
+     Dirección directa a la comida, incluso si está detrás de un muro.
+
+       dx = (col_comida - col_cabeza) / grid_cols
+       dy = (fila_comida - fila_cabeza) / grid_rows
+
+3.3 El vector de 14 entradas completo
+---------------------------------------
+
+  Índice   Componente              Valores      Descripción
+  ───────  ──────────────────────  ───────────  ──────────────────────────────
+  [0]      Proximidad rayo 0 (E)   [0.0, 1.0]   Obstáculo al Este
+  [1]      Proximidad rayo 1 (S)   [0.0, 1.0]   Obstáculo al Sur
+  [2]      Proximidad rayo 2 (O)   [0.0, 1.0]   Obstáculo al Oeste
+  [3]      Proximidad rayo 3 (N)   [0.0, 1.0]   Obstáculo al Norte
+  [4]      Comida rayo 0 (E)       {0.0, 1.0}   ¿Hay comida al Este?
+  [5]      Comida rayo 1 (S)       {0.0, 1.0}   ¿Hay comida al Sur?
+  [6]      Comida rayo 2 (O)       {0.0, 1.0}   ¿Hay comida al Oeste?
+  [7]      Comida rayo 3 (N)       {0.0, 1.0}   ¿Hay comida al Norte?
+  [8]      Dist. pared izquierda   [0.0, 1.0]   Qué tan lejos está el borde
+  [9]      Dist. pared derecha     [0.0, 1.0]
+  [10]     Dist. pared arriba      [0.0, 1.0]
+  [11]     Dist. pared abajo       [0.0, 1.0]
+  [12]     dx hacia comida         [-1.0, 1.0]  Componente horizontal
+  [13]     dy hacia comida         [-1.0, 1.0]  Componente vertical
+
+  Fórmula del tamaño:
+    num_inputs = (NUMBER_OF_RAYS × 2) + 4 (paredes) + 2 (dirección)
+               = (4 × 2) + 4 + 2  =  14
+
+3.4 El Algoritmo de Bresenham (cómo se traza cada rayo)
+---------------------------------------------------------
+
+  Para trazar la línea del rayo, usamos el Algoritmo de Bresenham,
+  compilado con Numba (@njit) para máxima velocidad:
+
+    Dados los puntos (x₁,y₁) y (x₂,y₂):
+      dx = |x₂-x₁|,  dy = |y₂-y₁|
+      sx = +1 si x₁<x₂, sino -1
+      sy = +1 si y₁<y₂, sino -1
+      err = dx/2
+
+    Bucle:
+      Agregar (x,y) a la lista de puntos
+      err -= dy
+      si err < 0:  y += sy;  err += dx
+      x += sx
+      repetir hasta alcanzar (x₂,y₂)
+
+  El rayo se extiende 2×grid_size unidades para garantizar que
+  atraviese todo el tablero.
+
+
+4. ¿CÓMO APRENDE? (FUNCIÓN DE FITNESS)
+================================================================================
+
+El FITNESS es la "puntuación de supervivencia" que le decimos a NEAT
+qué tan bien le fue a un genoma. Es el único feedback que recibe la IA.
+
+4.1 Fórmula del fitness
+-------------------------
+
+  Cada genoma juega RUNS_PER_GAME_SIZE = 10 partidas.
+  El fitness es el promedio de recompensas acumuladas:
+
+                  Σᵢ₌₁¹⁰ (comida_i × 500.0  +  pasos_i × 0.01)
+  fitness =  ─────────────────────────────────────────────────────
+                                   10
+
+  Donde:
+    comida_i   = piezas de comida comidas en la partida i
+    pasos_i    = pasos dados antes de morir en la partida i
+
+  Ejemplo concreto:
+    Un genoma come 5 frutas en 200 pasos:
+      recompensa = 5 × 500.0 + 200 × 0.01 = 2,500 + 2 = 2,502 puntos
+      contribución al fitness = 2,502 / 10 = 250.2
+
+  ¿Por qué 500 puntos por comida y 0.01 por supervivencia?
+    · La comida es lo que importa → recompensa alta
+    · La supervivencia es secundaria → recompensa pequeña para que
+      la serpiente no aprenda a solo "vivir" sin comer
+    · Ratio 50,000:1 garantiza que comer 1 fruta siempre supera
+      sobrevivir 5,000 pasos sin comer
+
+4.2 Condiciones de fin de partida
+------------------------------------
+
+  · MUERTE:    choca con pared o con su propio cuerpo
+  · HAMBRE:    no come en FOOD_TIMER_MAX = grid² / 4 = 400 pasos
+               (se reinicia cada vez que come)
+  · VICTORIA:  llena el tablero → bonus de +500×10 = 5,000 puntos
+
+  El límite de hambre de 400 pasos es crítico:
+    Con serpiente larga en un tablero 40×40, el camino mínimo a la comida
+    puede ser de cientos de pasos. 80 pasos (el valor original) era
+    injustamente bajo → esto fue el Bug-05 que corregimos.
+
+
+5. ARQUITECTURA DEL SISTEMA
+================================================================================
+
+5.1 Estructura de archivos
+-----------------------------
+
+  snake-neat/
+  ├── src/
+  │   ├── snake_ai/
+  │   │   ├── ai_multiprocessing.py   ← Punto de entrada. Orquesta todo.
+  │   │   ├── inputs.py               ← Vector de percepción (raycasting)
+  │   │   ├── constants.py            ← Direcciones y constantes
+  │   │   └── config                  ← Configuración NEAT (texto plano)
+  │   └── neat_reporters/
+  │       ├── ai_reporter_gui.py      ← GUI Pygame en tiempo real
+  │       ├── visu.py                 ← Visualiza topología de red
+  │       └── utils.py                ← Utilidades de imagen
+  ├── lib/fast_snake/                 ← Motor del juego (submódulo git)
+  ├── data/                           ← Fuentes e imágenes
+  ├── reset_evolution.py              ← Borra checkpoints y reinicia
+  └── checkpoints-neat-snake-*/
+      ├── neat-checkpoint-*           ← Estados guardados del algoritmo
+      └── training_log.csv            ← Registro de métricas por generación
+
+5.2 Dos hilos corriendo al mismo tiempo
+-----------------------------------------
+
+  El programa usa THREADING para correr la evolución y la GUI en paralelo:
+
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │  HILO DAEMON (evolución — en segundo plano)                         │
+  │                                                                     │
+  │  Cargar checkpoint → Evaluar 200 genomas × 10 partidas              │
+  │     (en paralelo usando multiprocessing, todos los núcleos de CPU)  │
+  │  → Calcular fitness → NEAT: selección + cruce + mutación            │
+  │  → Guardar CSV → Checkpoint cada 25 generaciones                    │
+  │  → Repetir indefinidamente                                          │
+  └─────────────────────────────────────────────────────────────────────┘
+                         ↕ comparte datos via threading.Event
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │  HILO PRINCIPAL (GUI — corre a 60 FPS)                              │
+  │                                                                     │
+  │  Pygame → simula el mejor genoma de la generación actual            │
+  │  → Panel izquierdo: partida en vivo                                 │
+  │  → Panel derecho: estadísticas + gráfica de fitness                 │
+  │  → Al cerrar la ventana: guarda checkpoint de emergencia            │
+  └─────────────────────────────────────────────────────────────────────┘
+
+5.3 Motor del juego (lib/fast_snake/)
+---------------------------------------
+
+  El tablero es un array 2D de numpy con estos valores:
+
+    EMPTY      = 0   (celda vacía)
+    SNAKE_HEAD = 11  (cabeza de la serpiente)
+    SNAKE_BODY = 12  (cuerpo de la serpiente)
+    WALL       = 13  (pared del borde)
+    FOOD       = 100 (comida)
+
+  Funciones compiladas con @njit (Numba = JIT compiler):
+    generate_game(game_size)           → inicializa tablero, serpiente y comida
+    move_snake(board, snake, dir, food) → ejecuta un paso de juego
+    render(surface, board, colors)     → dibuja el tablero en Pygame
+
+  ¿Por qué Numba? Con Python puro, evaluar 200 genomas × 10 partidas ×
+  cientos de pasos cada una tomaría minutos por generación. Con Numba,
+  el código se compila a código máquina la primera vez y luego es rápido.
+
+5.4 Sistema de checkpoints
+-----------------------------
+
+  El entrenamiento puede interrumpirse y reanudarse en cualquier momento.
+  Al arrancar, el programa busca el checkpoint válido más reciente:
+
+    1. Lee los checkpoints en orden descendente
+    2. Intenta cargar el más reciente
+    3. Si está corrupto, intenta el anterior (fallback automático)
+    4. Si no hay ninguno, empieza desde Generación 0
+
+  Se guarda automáticamente cada 25 generaciones y al cerrar la ventana.
+
+
+6. RESULTADOS Y ESTADO ACTUAL DEL ENTRENAMIENTO
+================================================================================
+
+6.1 Progreso del entrenamiento
+---------------------------------
+
+  Configuración principal (4 rayos + distancias a pared):
+    Directorio: checkpoints-neat-snake-4-rays-False-False-True-False-1-v2/
+    Generaciones completadas: ~6,342
+    Checkpoints almacenados:  ~859 archivos
+
+6.2 Evolución observada del comportamiento
+--------------------------------------------
+
+  Generaciones 1-50:
+    Los genomas se mueven al azar. Muchos mueren de hambre inmediatamente.
+    El mejor fitness es cercano a 0. La red apenas tiene conexiones.
+
+  Generaciones 50-500:
+    La serpiente aprende a no chocar contra las paredes inmediatas.
+    Empieza a detectar la comida con los flags de los rayos.
+    Fitness promedio comienza a subir visiblemente.
+
+  Generaciones 500-2000:
+    La serpiente come de forma consistente. Aprende rutas básicas.
+    Se forman especies especializadas. La topología de la red crece.
+
+  Generaciones 2000+:
+    Comportamiento más sofisticado. La serpiente gestiona su cuerpo largo.
+    El fitness del mejor genoma sigue mejorando, pero más lentamente.
+
+6.3 Métricas de seguimiento
+------------------------------
+
+  El archivo training_log.csv registra por cada generación:
+    generacion, mejor_fitness, fitness_promedio, num_especies, tiempo_s
+
+  La GUI muestra en tiempo real:
+    · Gráfica VERDE = mejor fitness (mejor genoma de cada generación)
+    · Gráfica AMARILLA = fitness promedio (toda la población)
+    · Brecha entre ambas = diversidad de la población
+
+
+7. GUÍA PARA LA DEMOSTRACIÓN EN VIVO
+================================================================================
+
+7.1 Cómo ejecutar el programa
+--------------------------------
+
+  # Activar entorno virtual (si no está activo)
+  .\venv\Scripts\Activate.ps1
+
+  # Iniciar el entrenamiento/simulación
+  python src/snake_ai/ai_multiprocessing.py
+
+  El programa carga el checkpoint más reciente automáticamente.
+  La ventana de 1280×720 se abre mostrando la simulación en vivo.
+
+  Para reiniciar desde cero (Generación 0):
+    python reset_evolution.py
+
+7.2 Qué mostrar durante la demo
+---------------------------------
+
+  PANEL IZQUIERDO — la partida en vivo:
+    · La serpiente verde juega sola con la IA
+    · La comida aparece como un punto rojo
+    · Score actual y score histórico en la esquina superior
+
+  PANEL DERECHO — estadísticas:
+    · Generación actual y número de especies
+    · Fitness del mejor genoma y promedio de la población
+    · Gráfica dual verde/amarilla del progreso histórico
+    · Barra de hambre (se vacía si no come)
+
+  BOTÓN "Ver Red Neuronal":
+    · Genera una imagen SVG de la topología de la red neuronal actual
+    · Muestra los nodos de entrada, ocultos y de salida
+    · Muestra cuáles conexiones están activas y sus pesos
+    · Requiere Graphviz instalado (winget install graphviz)
+
+7.3 Puntos clave para explicar al público
+-------------------------------------------
+
+  1. "La IA no fue programada, APRENDIÓ sola por evolución."
+     → Mostrar el generador en la gen. actual vs. gen. 1
+
+  2. "Así es como 've' la serpiente."
+     → Explicar los 4 rayos y el vector de 14 entradas
+     → La serpiente no ve el tablero completo, solo lo que hay
+        en 4 direcciones
+
+  3. "Esto es lo que le 'decimos' qué tan bien le fue."
+     → Explicar la función de fitness: comida = +500, paso = +0.01
+     → La IA no sabe que está jugando Snake, solo maximiza ese número
+
+  4. "La red empieza simple y se vuelve compleja."
+     → Mostrar el botón "Ver Red Neuronal"
+     → Al inicio: 14 entradas → 4 salidas (sin neuronas ocultas)
+     → Con el tiempo: aparecen neuronas y conexiones ocultas
+
+  5. "Lleva ~6,000 generaciones entrenando."
+     → Cada generación evalúa 200 serpientes × 10 partidas = 2,000 partidas
+     → Total: ~12.7 millones de partidas de Snake evaluadas
+
+
+8. BUGS IMPORTANTES QUE RESOLVIMOS
+================================================================================
+
+Durante el desarrollo encontramos y corregimos varios bugs críticos.
+Los más importantes para entender el proyecto:
+
+BUG-01 — La serpiente "veía peligro donde no había" (raycasting)
+  Archivo: src/snake_ai/inputs.py
+  ──────────────────────────────────────────────────────────────
+  Problema:
+    Las distancias de obstáculos se inicializaban en 0.0.
+    Si un rayo salía del tablero sin encontrar nada, su distancia quedaba
+    en 0. La fórmula de proximidad calculaba:
+      1.0 - (0 / diagonal) = 1.0  →  MÁXIMO PELIGRO (falso positivo)
+    La serpiente "veía paredes imaginarias" en direcciones libres.
+
+  Solución:
+    Inicializar con centinela = grid_size × 3 (número muy grande).
+    Si el rayo no impacta nada:
+      1.0 - (120 / 56.57) ≈ negativo → clip a 0.0  →  Sin peligro
+
+  Impacto: este bug hacía que la IA aprendiera a evitar direcciones
+  libres, dificultando enormemente el aprendizaje.
+
+BUG-05 — La serpiente moría de hambre injustamente (timer muy bajo)
+  Archivo: src/snake_ai/ai_multiprocessing.py
+  ──────────────────────────────────────────────────────────────────
+  Problema:
+    FOOD_TIMER_MAX era grid_size × 3 = 120 pasos. Con una serpiente
+    larga en un tablero 40×40, 120 pasos son insuficientes para llegar
+    a la comida evitando el propio cuerpo. La serpiente moría penalizada
+    sin haber "hecho nada malo".
+
+  Solución:
+    FOOD_TIMER_MAX = grid_size² / 4 = 400 pasos (fórmula dinámica).
+
+  Impacto: con 120 pasos, la IA aprendía a ser agresiva y directa pero
+  fallaba en situaciones de cuerpo largo. Con 400 pasos, tiene margen
+  para navegar rutas largas.
+
+BUG-C — El marcador máximo histórico se reiniciaba cada generación
+  Archivo: src/neat_reporters/ai_reporter_gui.py
+  ─────────────────────────────────────────────────────────────────
+  Problema:
+    La variable _best_visual_score se reseteaba al inicio de cada nueva
+    generación, perdiendo el máximo histórico.
+
+  Solución:
+    Rastrear _best_visual_score de forma independiente del ciclo de
+    generaciones, nunca reseteándolo.
+
+BUG-G — La gráfica de la GUI mostraba etiqueta incorrecta
+  Archivo: src/neat_reporters/ai_reporter_gui.py
+  ─────────────────────────────────────────────────────────────────
+  Problema:
+    La gráfica decía "fitness promedio" pero en realidad mostraba el
+    fitness del mejor genoma.
+
+  Solución (Rev v2):
+    Se corrigió la etiqueta Y se agregó una segunda serie en la gráfica
+    mostrando el fitness promedio real (línea amarilla), creando una
+    vista dual que muestra la brecha entre mejor y promedio.
+
+
+9. DETALLES TÉCNICOS (CONFIGURACIÓN NEAT Y FÓRMULAS)
+================================================================================
+
+9.1 Parámetros del algoritmo NEAT
+------------------------------------
+
+  Parámetro                      Valor       Explicación
+  ────────────────────────────── ─────────── ────────────────────────────────
+  pop_size                       200         Serpientes por generación
+  num_inputs                     14          Entradas al vector de percepción
+  num_hidden                     0           Sin neuronas ocultas al inicio
+  num_outputs                    4           Derecha / Izquierda / Abajo / Arriba
+  initial_connection             partial 0.5 50% de conexiones al inicio
+  feed_forward                   True        Red hacia adelante (sin ciclos)
+  activation_default             tanh        Función de activación inicial
+  activation_options             tanh, relu  Puede mutar entre funciones
+  activation_mutate_rate         0.05        5% de probabilidad de mutar activación
+  weight_mutate_rate             0.8         80% de probabilidad de mutar un peso
+  weight_replace_rate            0.1         10% de probabilidad de reemplazar peso
+  weight_init_stdev              1.0         Desviación estándar de pesos iniciales
+  weight_max/min_value           ±30         Rango de pesos permitido
+  conn_add_prob                  0.2         20% prob. de agregar una conexión
+  conn_delete_prob               0.2         20% prob. de eliminar una conexión
+  node_add_prob                  0.2         20% prob. de agregar un nodo oculto
+  node_delete_prob               0.2         20% prob. de eliminar un nodo oculto
+  compatibility_threshold        3.0         Umbral de distancia para especiación
+  max_stagnation                 30          Generaciones sin mejora antes de
+                                             eliminar la especie
+  species_elitism                1           Mínimo 1 especie siempre sobrevive
+  elitism                        5           Los 5 mejores de cada especie pasan
+                                             sin modificación a la siguiente gen.
+  survival_threshold             0.2         Solo el 20% mejor de cada especie
+                                             puede reproducirse
+  fitness_criterion              max         NEAT maximiza el fitness
+  no_fitness_termination         True        Entrena indefinidamente (no para
+                                             al alcanzar fitness_threshold)
+  reset_on_extinction            True        Si todas las especies se extinguen,
+                                             reinicia la población
+
+9.2 Hiperparámetros del entrenamiento
+----------------------------------------
+
+  Parámetro               Valor    Descripción
+  ─────────────────────── ──────── ───────────────────────────────────────
+  RUNS_PER_GAME_SIZE      10       Partidas por genoma por generación
+  GAME_SIZE_RANGE         [40]     Tablero 40×40
+  NUMBER_OF_RAYS          4        Rayos de visión radial
+  INCLUDE_WALL_DISTANCE   True     +4 inputs (distancias a paredes)
+  INCLUDE_LAST_DIRECTION  False    Desactivado (activar cambia num_inputs a 16)
+  INCLUDE_SNAKE_LENGTH    False    Desactivado
+  TEMPORAL_LENGTH         1        Sin apilado temporal de frames
+  FOOD_REWARD             500.0    Puntos por pieza de comida
+  SURVIVAL_BONUS          0.01     Puntos por paso sobrevivido
+  FOOD_TIMER_MAX          400      Pasos antes de morir de hambre (40²/4)
+  CHECKPOINT_INTERVAL     25       Guardar estado cada 25 generaciones
+  EARLY_STOPPING          0        Desactivado (0 = sin parada automática)
+  ENABLE_GUI              True     Mostrar ventana de simulación
+
+9.3 ¿Qué pasa si se cambia NUMBER_OF_RAYS?
+--------------------------------------------
+
+  Cambiar cualquiera de estos parámetros cambia el tamaño del vector
+  de entrada, lo que hace INCOMPATIBLES los checkpoints anteriores:
+
+    · NUMBER_OF_RAYS = 8  →  num_inputs = (8×2)+4+2 = 22  (era 14)
+    · INCLUDE_LAST_DIRECTION = True  →  num_inputs = 16
+    · TEMPORAL_LENGTH = 3  →  todos los inputs × 3
+
+  En ese caso hay que:
+    1. Actualizar num_inputs en src/snake_ai/config
+    2. Crear una nueva carpeta de checkpoints
+    3. El programa imprime el valor correcto al arrancar si hay desajuste
+
+
+10. DEPENDENCIAS Y CÓMO EJECUTAR
+================================================================================
+
+10.1 Paquetes de Python
+-------------------------
+
+  Paquete        Versión mín.  Uso
+  ─────────────  ────────────  ─────────────────────────────────────────────
+  Python         3.11+         Lenguaje base (f-strings, match, typing)
+  neat-python    1.0+          Implementación del algoritmo NEAT
+  numpy          1.24+         Arrays del tablero y operaciones matriciales
+  numba          0.57+         Compilación JIT del motor y raycasting (@njit)
+  pygame-ce      2.4+          Renderizado GUI y simulación visual
+  pygame-gui     0.6+          Widgets (botones, paneles de texto)
+  graphviz       (sistema)     Visualización de topología — OPCIONAL
+                               Solo para el botón "Ver Red Neuronal"
+
+10.2 Instalación
+------------------
+
+  # 1. Crear y activar entorno virtual
+  python -m venv venv
+  .\venv\Scripts\Activate.ps1
+
+  # 2. Instalar dependencias Python
+  pip install -r src/requirements.txt
+
+  # 3. (Opcional) Instalar Graphviz para visualización de red
+  winget install graphviz
+
+10.3 Comandos principales
+---------------------------
+
+  # Iniciar entrenamiento (carga checkpoint automáticamente)
+  python src/snake_ai/ai_multiprocessing.py
+
+  # Reiniciar desde Generación 0 (borra TODOS los checkpoints)
+  python reset_evolution.py
+
+================================================================================
+  Proyecto: Snake AI con NEAT
+  Revisión v3 — Preparada para presentación final — 07 de mayo de 2026
+================================================================================

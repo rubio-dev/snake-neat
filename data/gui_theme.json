@@ -1,0 +1,25 @@
+{
+    "#net_btn": {
+        "colours": {
+            "normal_bg":      "#000E00",
+            "hovered_bg":     "#003800",
+            "active_bg":      "#001800",
+            "normal_text":    "#00FF41",
+            "hovered_text":   "#57FF14",
+            "active_text":    "#AAFFAA",
+            "normal_border":  "#008C00",
+            "hovered_border": "#00FF41",
+            "active_border":  "#005000"
+        },
+        "font": {
+            "name":   "Courier New",
+            "size":   "11",
+            "bold":   "1",
+            "italic": "0"
+        },
+        "misc": {
+            "shape":              "rectangle",
+            "shape_corner_radius": "0"
+        }
+    }
+}

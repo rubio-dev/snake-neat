@@ -1,0 +1,7 @@
+llvmlite==0.39.1
+numba==0.56.2
+numpy==1.23.2
+pip==21.3.1
+pygame==2.1.2
+setuptools==59.8.0
+wheel==0.37.1

@@ -1,0 +1,103 @@
+# NEAT Snake — Configuración de Evolución
+# =========================================
+# Arquitectura v2: 14 inputs
+#   4 distancias a obstáculos  (rayos)
+#   4 flags de comida          (rayos)
+#   4 distancias a paredes     (include_wall_distance=True)
+#   2 vector a la comida       (dx, dy normalizado)
+#
+# Si se cambia la configuración de inputs en ai_multiprocessing.py,
+# ejecutar el programa para que valide y reporte el num_inputs correcto.
+
+[NEAT]
+fitness_criterion     = max
+# Si se alcanzara este umbral (~200 comidas en 10 partidas) el entrenamiento
+# terminaría automáticamente. En la práctica nunca se alcanza: actúa como guardia
+# de seguridad. La bandera no_fitness_termination=True garantiza que el proceso
+# siempre corra hasta que el usuario cierre la ventana.
+fitness_threshold     = 100000
+pop_size              = 200
+reset_on_extinction   = True
+no_fitness_termination = True
+
+[DefaultGenome]
+# num_inputs debe coincidir con _compute_input_size() en ai_multiprocessing.py
+# El programa verifica esto al arrancar y falla rápido si hay discrepancia.
+num_inputs              = 14
+num_hidden              = 0
+num_outputs             = 4
+
+# Conexión inicial parcial (50%) para diversidad genética desde el inicio.
+initial_connection      = partial_direct 0.5
+feed_forward            = True
+
+# Coeficientes de compatibilidad para la métrica de distancia entre genomas.
+compatibility_disjoint_coefficient    = 1.0
+compatibility_weight_coefficient      = 0.6
+
+# Probabilidades de mutación estructural (añadir/eliminar conexiones y nodos).
+conn_add_prob           = 0.2
+conn_delete_prob        = 0.2
+node_add_prob           = 0.2
+node_delete_prob        = 0.2
+
+# Funciones de activación: tanh para neuronas con saturación suave,
+# relu para neuronas que necesitan activación lineal positiva.
+activation_default      = tanh
+activation_options      = tanh relu
+activation_mutate_rate  = 0.05
+
+aggregation_default     = sum
+aggregation_options     = sum
+aggregation_mutate_rate = 0.0
+
+# Bias: mutación activa con potencia moderada para búsqueda efectiva.
+bias_init_mean          = 0.0
+bias_init_stdev         = 1.0
+bias_replace_rate       = 0.1
+bias_mutate_rate        = 0.7
+bias_mutate_power       = 0.5
+bias_max_value          = 30.0
+bias_min_value          = -30.0
+
+# Response: fijo en 1.0 (sin mutación) para simplificar el espacio de búsqueda.
+response_init_mean      = 1.0
+response_init_stdev     = 0.0
+response_replace_rate   = 0.0
+response_mutate_rate    = 0.0
+response_mutate_power   = 0.0
+response_max_value      = 30.0
+response_min_value      = -30.0
+
+# Pesos: alta tasa de mutación para exploración agresiva del espacio de pesos.
+weight_max_value        = 30
+weight_min_value        = -30
+weight_init_mean        = 0.0
+weight_init_stdev       = 1.0
+weight_mutate_rate      = 0.8
+weight_replace_rate     = 0.1
+weight_mutate_power     = 0.5
+enabled_default         = True
+enabled_mutate_rate     = 0.01
+
+[DefaultSpeciesSet]
+# Umbral de distancia genómica para separar genomas en especies distintas.
+# Valor más alto = menos especies (clustering más agresivo).
+compatibility_threshold = 3.0
+
+[DefaultStagnation]
+species_fitness_func = max
+# Generaciones sin mejora antes de extinguir una especie.
+# Aumentado de 20 a 30 para dar más tiempo a estrategias de caza complejas.
+max_stagnation  = 30
+# Número mínimo de especies que nunca se eliminan por estancamiento.
+# Garantiza que siempre haya al menos 1 especie élite, evitando que el
+# mejor linaje sea sacrificado si llega a su límite de stagnation.
+species_elitism = 1
+
+[DefaultReproduction]
+# Individuos de élite que pasan sin mutación a la siguiente generación.
+# Aumentado de 2 a 5 para preservar buenos genomas entre generaciones.
+elitism            = 5
+# Fracción de la especie que puede reproducirse.
+survival_threshold = 0.2

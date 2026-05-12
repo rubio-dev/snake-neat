@@ -1,0 +1,14 @@
+venv/
+.claude/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+.idea/
+checkpoints-neat-snake-*/
+Digraph
+Digraph.gv
+Digraph.svg
+avg_fitness.svg
+speciation.svg

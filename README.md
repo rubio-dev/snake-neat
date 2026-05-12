@@ -1,120 +1,122 @@
-# NEAT Snake
+# Snake NEAT
 
-Sistema de entrenamiento de Inteligencia Artificial para el juego Snake utilizando
-el algoritmo **NEAT** (NeuroEvolution of Augmenting Topologies).
+Entrenamiento de una IA para jugar Snake usando **NEAT** (NeuroEvolution of Augmenting Topologies). La red neuronal evoluciona generación a generación sin aprendizaje supervisado — solo selección natural y mutación.
 
-## Descripción
+![logo](data/readme-data/logo.PNG)
 
-Este proyecto evoluciona redes neuronales para que un agente aprenda a jugar Snake
-de forma autónoma. Utiliza **procesamiento paralelo** (multiprocessing) para evaluar
-genomas en todos los núcleos disponibles y cuenta con una **interfaz gráfica
-interactiva** que permite visualizar el progreso en tiempo real.
+---
 
-## Características Principales
+## Características
 
-- Entrenamiento continuo con evaluación paralela multi-núcleo.
-- Interfaz gráfica (GUI) basada en Pygame-CE y Pygame GUI con ventana fija de 1280×720.
-- Sistema de checkpoints automáticos cada 5 generaciones para reanudar sin perder progreso.
-- Recuperación automática ante checkpoints corruptos (fallback al anterior).
-- Visualización de la topología de la red neuronal (requiere Graphviz instalado).
-- Estadísticas en tiempo real: fitness, generación, tiempo/gen, especies, barra de hambre.
-- Simulación en vivo del mejor genoma de la generación actual.
+- Evaluación paralela multi-núcleo para acelerar el entrenamiento.
+- GUI en tiempo real (Pygame) con simulación del mejor genoma de cada generación.
+- Sistema de percepción por **rayos** (raycasting) desde la cabeza de la serpiente.
+- Checkpoints automáticos con recuperación ante corrupción (fallback al anterior).
+- Visualización de la topología de la red neuronal (requiere Graphviz).
+- Parada temprana configurable por estancamiento del fitness.
 
-## Requisitos del Sistema
-
-- Python 3.11+
-- Graphviz instalado como herramienta de sistema (y en el PATH) para visualizar redes.
-- Dependencias de Python (ver `src/requirements.txt`).
+---
 
 ## Instalación
 
-```powershell
-# 1. Crear entorno virtual
-python -m venv venv
+**Requisitos:** Python 3.11+
 
-# 2. Activarlo
+```powershell
+# 1. Crear y activar entorno virtual
+python -m venv venv
 .\venv\Scripts\Activate.ps1
 
-# 3. Instalar dependencias de Python
+# 2. Instalar dependencias
 pip install -r src/requirements.txt
 ```
 
-## Ejecución
+> **Opcional:** Graphviz para visualizar la red neuronal → `winget install graphviz`
+
+---
+
+## Uso
 
 ```powershell
-python src/snake_ai/ai_multiprocessing.py
-```
+# Iniciar (o reanudar) el entrenamiento
+python src/snake_ai/train.py
 
-El programa carga automáticamente el último checkpoint válido. Si no existe ninguno,
-inicia la evolución desde la Generación 0.
-
-Para **reiniciar** la evolución desde cero:
-
-```powershell
+# Reiniciar desde Generación 0 (borra todos los checkpoints)
 python reset_evolution.py
 ```
+
+El programa carga automáticamente el checkpoint más reciente. Si no existe ninguno, inicia desde cero.
+
+---
 
 ## Controles de la GUI
 
 | Acción | Descripción |
 |---|---|
 | Cerrar ventana | Detiene el entrenamiento de forma segura y guarda checkpoint final |
-| Botón **Ver Red Neuronal** | Genera y abre el diagrama SVG de la red del mejor genoma |
+| **Ver Red Neuronal** | Genera y abre el diagrama SVG de la topología del mejor genoma |
 
-## Algoritmo de Fitness
+---
 
-Cada genoma juega **10 partidas** en un tablero de 40×40 y su fitness es el promedio:
+## Percepción de la red
 
-| Evento | Recompensa |
+La serpiente percibe su entorno mediante **4 rayos radiales** lanzados desde su cabeza. Cada rayo reporta:
+- Distancia al obstáculo más cercano (pared o cuerpo propio)
+- Si hay comida en esa dirección
+
+Entradas adicionales opcionales: distancias a las 4 paredes, dirección normalizada hacia la comida, última dirección, longitud de la serpiente.
+
+---
+
+## Función de fitness
+
+Cada genoma juega **10 partidas** en un tablero de 40×40. El fitness es el promedio:
+
+| Evento | Valor |
 |---|---|
-| Comer una pieza de comida | +500.0 puntos |
-| Sobrevivir un paso sin comer | +0.01 puntos |
-| Timeout sin comer (> `FOOD_TIMER_MAX` pasos) | Muerte por hambre |
-| Victoria (tablero lleno) | +500.0 y fin inmediato |
+| Comer comida | +500.0 |
+| Sobrevivir un paso | +0.01 |
+| Hambre (sin comer demasiados pasos) | Muerte |
+| Victoria (tablero lleno) | +5000.0 y fin |
 
-## Parámetros Configurables
+---
 
-Editar en `src/snake_ai/ai_multiprocessing.py`:
+## Parámetros configurables
 
-| Parámetro | Valor por defecto | Descripción |
+Todos los hiperparámetros están en `src/snake_ai/parametros.py`:
+
+| Parámetro | Por defecto | Descripción |
 |---|---|---|
-| `RUNS_PER_GAME_SIZE` | `10` | Partidas por genoma por generación |
-| `ENABLE_GUI` | `True` | Activar/desactivar la GUI |
-| `NUMBER_OF_RAYS` | `4` | Rayos de visión de la serpiente |
-| `INCLUDE_WALL_DISTANCE` | `True` | Incluir distancias a paredes como input |
-| `INCLUDE_LAST_DIRECTION` | `False` | Incluir última dirección como input |
-| `INCLUDE_SNAKE_LENGTH` | `False` | Incluir longitud normalizada como input |
-| `TEMPORAL_LENGTH` | `1` | Frames concatenados (1 = sin memoria temporal) |
-| `FOOD_REWARD` | `500.0` | Recompensa por comer |
-| `FOOD_TIMER_MAX` | `grid_size² / 4` (400 para 40×40) | Pasos máximos sin comer (timeout de hambre); calculado dinámicamente |
-| `CORE_COUNT` | `CPU // 2` | Núcleos para evaluación paralela |
+| `partidas_por_tam` | `10` | Partidas por genoma por generación |
+| `habilitar_gui` | `True` | Activa/desactiva la GUI |
+| `num_rayos` | `4` | Rayos de visión (cambia `num_inputs`) |
+| `incluir_dist_pared` | `True` | +4 entradas: distancias a paredes |
+| `incluir_ultima_dir` | `False` | +2 entradas: última dirección |
+| `incluir_long_serp` | `False` | +1 entrada: longitud normalizada |
+| `long_temporal` | `1` | Frame stacking (1 = sin memoria) |
+| `recompensa_comida` | `500.0` | Puntos por comer |
+| `max_pasos_hambre` | `tablero² / 4` | Pasos máximos sin comer |
+| `intervalo_checkpoint` | `25` | Generaciones entre guardados |
 
-> **Nota:** Si cambias `NUMBER_OF_RAYS`, `INCLUDE_*` o `TEMPORAL_LENGTH`,
-> debes actualizar `num_inputs` en `src/snake_ai/config`. El programa valida
-> esto al arrancar y reporta el valor correcto si hay discrepancia.
+> Si cambias `num_rayos`, `incluir_*` o `long_temporal`, debes actualizar `num_inputs` en `src/snake_ai/config`. El programa lo valida al arrancar e imprime el valor correcto si hay discrepancia.
 
-## Arquitectura del Proyecto
+---
+
+## Arquitectura
 
 ```
 snake-neat/
 ├── src/
 │   ├── snake_ai/
-│   │   ├── ai_multiprocessing.py   # Punto de entrada y orquestador principal
-│   │   ├── inputs.py               # Generación del vector de observación (raycasting)
-│   │   ├── constants.py            # Direcciones y constantes compartidas
-│   │   └── config                  # Configuración NEAT (parámetros de evolución)
+│   │   ├── train.py          # Punto de entrada: evolución + GUI en hilos paralelos
+│   │   ├── parametros.py     # Todos los hiperparámetros configurables
+│   │   ├── perception.py     # Vector de observación por raycasting (Numba)
+│   │   ├── movement.py       # Selección de dirección sin giros de 180°
+│   │   └── config            # Configuración NEAT (población, mutación, etc.)
 │   └── neat_reporters/
-│       ├── ai_reporter_gui.py      # Reporter + GUI Pygame en tiempo real
-│       ├── visu.py                 # Visualización de redes y estadísticas
-│       └── utils.py                # Utilidades de imagen auxiliares
-├── lib/fast_snake/                 # Motor de juego Snake (submódulo C/Cython)
-├── data/                           # Assets: fuentes, sonidos, imágenes
-├── reset_evolution.py              # Script para borrar checkpoints y reiniciar
-└── checkpoints-neat-snake-*/       # Carpetas de checkpoints (generadas al entrenar)
+│       ├── gui.py            # GUI Pygame + reporter en tiempo real
+│       └── visualization.py  # Gráficas de fitness, especies y topología de red
+├── lib/fast_snake/           # Motor Snake compilado con Numba (@njit)
+├── data/                     # Assets: fuentes, sonidos, imágenes
+├── docs/                     # Documentación del proyecto
+└── reset_evolution.py        # Reinicia el entrenamiento borrando checkpoints
 ```
-
-## Requisitos opcionales
-
-- **Graphviz** (herramienta de sistema): necesario para el botón "Ver Red Neuronal".
-  - Windows: `winget install graphviz`
-  - El programa detecta automáticamente las rutas de instalación típicas.

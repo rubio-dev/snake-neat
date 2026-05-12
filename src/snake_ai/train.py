@@ -162,6 +162,8 @@ class RegistradorCSV(neat.reporting.BaseReporter):
                 f'{tiempo_val:.2f}',
             ])
 
+StatsCSVLogger = RegistradorCSV  # Alias de compatibilidad con checkpoints anteriores
+
 # Configura e inicia el ciclo de evolución NEAT completo
 def ejecutar(ruta_config):
     # Validar que num_inputs del config coincida con la configuración de flags actual
@@ -187,9 +189,11 @@ def ejecutar(ruta_config):
 
     poblacion = None
 
-    if os.listdir(carpeta_checkpoint):
+    archivos_checkpoint = [f for f in os.listdir(carpeta_checkpoint) if f.startswith('neat-checkpoint-')]
+
+    if archivos_checkpoint:
         lista_checkpoints = sorted(
-            os.listdir(carpeta_checkpoint),
+            archivos_checkpoint,
             key = lambda x: int(x.split("-")[-1]),
             reverse = True,
         )
@@ -317,4 +321,5 @@ def ejecutar(ruta_config):
         visualization.graficar_especies(estadisticas, mostrar = True)
 
 # PUNTO DE PARTIDA
-ejecutar("src/snake_ai/config")
+if __name__ == '__main__':
+    ejecutar("src/snake_ai/config")

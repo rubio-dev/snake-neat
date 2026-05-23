@@ -1,12 +1,13 @@
 # NEAT Snake — Configuración de Evolución
 # =========================================
-# Arquitectura v2: 14 inputs
-#   4 distancias a obstáculos  (rayos)
-#   4 flags de comida          (rayos)
-#   4 distancias a paredes     (include_wall_distance=True)
-#   2 vector a la comida       (dx, dy normalizado)
+# Arquitectura v2: 30 inputs
+#   8 distancias a cuerpo propio (rayos)
+#   8 distancias a paredes       (rayos)
+#   8 flags de comida            (rayos)
+#   4 distancias a paredes cardinales (include_wall_distance=True)
+#   2 vector a la comida         (dx, dy normalizado)
 #
-# Si se cambia la configuración de inputs en ai_multiprocessing.py,
+# Si se cambia la configuración de inputs en parametros.py,
 # ejecutar el programa para que valide y reporte el num_inputs correcto.
 
 [NEAT]
@@ -21,9 +22,9 @@ reset_on_extinction   = True
 no_fitness_termination = True
 
 [DefaultGenome]
-# num_inputs debe coincidir con _compute_input_size() en ai_multiprocessing.py
+# num_inputs debe coincidir con calcular_tam_entradas() en train.py
 # El programa verifica esto al arrancar y falla rápido si hay discrepancia.
-num_inputs              = 14
+num_inputs              = 30
 num_hidden              = 0
 num_outputs             = 4
 
@@ -83,7 +84,7 @@ enabled_mutate_rate     = 0.01
 [DefaultSpeciesSet]
 # Umbral de distancia genómica para separar genomas en especies distintas.
 # Valor más alto = menos especies (clustering más agresivo).
-compatibility_threshold = 3.0
+compatibility_threshold = 3.5
 
 [DefaultStagnation]
 species_fitness_func = max
@@ -98,6 +99,6 @@ species_elitism = 1
 [DefaultReproduction]
 # Individuos de élite que pasan sin mutación a la siguiente generación.
 # Aumentado de 2 a 5 para preservar buenos genomas entre generaciones.
-elitism            = 5
+elitism            = 2
 # Fracción de la especie que puede reproducirse.
 survival_threshold = 0.2

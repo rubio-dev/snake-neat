@@ -13,7 +13,7 @@ class TileTypes(enum.Enum):
     FOOD = 100
 
 
-@njit
+@njit(cache=True)
 def get_rand_empty_pos(game: [[int]]) -> (int, int):
     """
     Returns a random empty position in the game_array.

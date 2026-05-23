@@ -1,0 +1,590 @@
+================================================================================
+  REPORTE TECNICO ACTUALIZADO — Snake AI con NEAT
+  Version: arquitectura v2 (8 rayos rotativos, 30 inputs)
+  Fecha:   2026-05-13
+================================================================================
+
+
+================================================================================
+  PARTE 1 — REPORTE TECNICO EXHAUSTIVO
+================================================================================
+
+
+--------------------------------------------------------------------------------
+  1. VISION GENERAL
+--------------------------------------------------------------------------------
+
+Snake-NEAT entrena una red neuronal para jugar Snake usando el algoritmo
+NEAT (NeuroEvolution of Augmenting Topologies). A diferencia del aprendizaje
+supervisado o del Deep Reinforcement Learning, NEAT no usa backpropagation
+ni dataset de entrenamiento: evoluciona simultaneamente la TOPOLOGIA y los
+PESOS de las redes mediante seleccion natural, cruzamiento y mutacion.
+
+Caracteristicas distintivas del proyecto:
+
+  - Percepcion EGOCENTRICA por raycasting (8 rayos que rotan con la
+    direccion de movimiento de la serpiente).
+  - Separacion explicita entre obstaculos: cuerpo propio vs. paredes.
+  - Sistema de movimiento con 5 niveles de fallback (NEAT, zigzag
+    Hamiltoniano, flood fill BFS, dir. segura, libre).
+  - Funcion de fitness con shaping de distancia y penalizacion por
+    auto-colision para resolver el problema de la senal escasa.
+  - Evaluacion paralela multi-nucleo y motor de juego compilado con Numba.
+  - GUI Pygame en tiempo real con simulacion del mejor genoma + graficas.
+  - Checkpoints automaticos con fallback ante corrupcion.
+
+
+--------------------------------------------------------------------------------
+  2. ESTRUCTURA DEL PROYECTO
+--------------------------------------------------------------------------------
+
+  snake-neat/
+  |-- src/
+  |   |-- snake_ai/
+  |   |   |-- train.py           Punto de entrada: orquesta evolucion + GUI
+  |   |   |-- parametros.py      Hiperparametros globales
+  |   |   |-- perception.py      Raycasting (Bresenham + Numba)
+  |   |   |-- movement.py        Selector de direccion con 5 fallbacks
+  |   |   |-- config             Configuracion NEAT (200 genomas, 30 inputs)
+  |   |   `-- requirements.txt
+  |   `-- neat_reporters/
+  |       |-- gui.py             Reporter NEAT con GUI Pygame en vivo
+  |       `-- visualization.py   Graficas postraining + diagrama Graphviz
+  |-- lib/fast_snake/            Motor Snake compilado con @njit
+  |-- data/
+  |   `-- gui_theme.json         Tema visual de la GUI
+  |-- docs/                      Documentacion y reportes
+  |-- checkpoints-neat-snake-8-rays-True-False-True-False-1-v2/
+  |                              Checkpoints (nombre codifica configuracion)
+  |-- reset_evolution.py         Borra checkpoints y reinicia desde gen 0
+  |-- README.md
+  `-- CLAUDE.md
+
+
+--------------------------------------------------------------------------------
+  3. ARQUITECTURA DE LA RED NEURONAL
+--------------------------------------------------------------------------------
+
+  Entradas:    30
+  Ocultas:     0 (NEAT las agrega por mutacion)
+  Salidas:     4 (derecha, izquierda, abajo, arriba)
+  Tipo:        Feedforward aciclica
+  Activacion:  tanh (default), relu (opcional via mutacion)
+  Conexion inicial: parcial 50% (diversidad genetica desde el inicio)
+
+  Distribucion del vector de entrada (30 valores):
+
+    Indices [0-7]    Proximidad al CUERPO PROPIO por rayo (8 valores)
+    Indices [8-15]   Proximidad a la PARED por rayo       (8 valores)
+    Indices [16-23]  Flag de COMIDA por rayo (0.0 / 1.0)  (8 valores)
+    Indices [24-27]  Distancia a las 4 paredes cardinales (4 valores)
+    Indices [28-29]  Vector (dx, dy) normalizado a comida (2 valores)
+
+
+--------------------------------------------------------------------------------
+  4. SISTEMA DE PERCEPCION (perception.py)
+--------------------------------------------------------------------------------
+
+  4.1 Raycasting EGOCENTRICO
+  ---------------------------
+  La serpiente lanza 8 rayos radialmente desde su cabeza. Cuando
+  dir_rotativas=True (configuracion actual), TODOS los rayos rotan con
+  la direccion de movimiento actual. El rayo 0 siempre apunta hacia
+  donde se mueve la serpiente; el rayo 1 a 45 grados de eso, y asi.
+
+    angulo_inicial = atan2(ultima_dir.y, ultima_dir.x)
+
+  Esto da percepcion RELATIVA en lugar de absoluta. La red aprende
+  patrones tipo "hay peligro adelante" en vez de "hay peligro al norte",
+  lo que generaliza mejor.
+
+  4.2 Trazado por Bresenham
+  --------------------------
+  Cada rayo se traza con el algoritmo de Bresenham (compilado con Numba),
+  que recorre celda por celda hasta encontrar el primer obstaculo.
+
+  4.3 Separacion CUERPO vs. PARED
+  --------------------------------
+  Antes la perception devolvia "distancia al primer obstaculo" sin
+  distinguir tipos. Ahora cada rayo devuelve TRES valores independientes:
+
+    - dist_cuerpo[i]  -- distancia al cuerpo propio (si lo encuentra)
+    - dist_pared[i]   -- distancia a la pared (si la encuentra)
+    - band_comida[i]  -- 1.0 si encuentra comida antes de un obstaculo
+
+  Razon: cuerpo y pared tienen significados distintos para la red.
+  La pared es estatica y siempre mata; el cuerpo cambia de forma cada
+  paso y representa un peligro mas dinamico que la red puede modelar
+  por separado.
+
+  4.4 Normalizacion HIPERBOLICA
+  ------------------------------
+  La proximidad se calcula como:
+
+    proximidad = clip(1 / max(distancia_euclidiana, 1.0), 0.0, 1.0)
+
+  Asi la senal es muy SENSIBLE cuando el obstaculo esta cerca (1, 2, 3
+  celdas) y casi NULA cuando esta lejos. La red puede ignorar peligros
+  remotos y enfocarse en los inminentes.
+
+
+--------------------------------------------------------------------------------
+  5. SELECTOR DE DIRECCION (movement.py)
+--------------------------------------------------------------------------------
+
+  La red devuelve 4 salidas, pero NO se aplican directamente. El selector
+  implementa una jerarquia de 5 niveles de fallback:
+
+  Nivel 1 -- NEAT
+    Toma la direccion con mayor activacion entre las que NO son
+    el giro de 180 grados, y verifica que no choque con cuerpo/pared.
+    Esta es la decision normal en cada paso.
+
+  Nivel 2 -- Zigzag boustrophedon (ciclo Hamiltoniano)
+    Si TODAS las salidas de NEAT chocan, sigue un patron fila a fila:
+    filas pares hacia la derecha, impares hacia la izquierda, y baja
+    al final de cada fila. En la ultima fila sube por la columna 1.
+    Garantiza recorrer todo el tablero sin chocar consigo misma.
+
+  Nivel 3 -- Flood fill (BFS)
+    Si zigzag tampoco es seguro, hace BFS desde cada celda candidata
+    y elige la que deja MAS celdas alcanzables. Maximiza el espacio
+    libre futuro.
+
+  Nivel 4 -- Cualquier direccion segura (incluido giro de 180)
+    Ultima alternativa antes de morir.
+
+  Nivel 5 -- Sin filtro
+    Muerte inevitable: la red elige libremente.
+
+  IMPORTANTE: Este sistema es un colchon de seguridad. En operacion
+  normal NEAT decide; los fallbacks solo entran en situaciones criticas.
+
+
+--------------------------------------------------------------------------------
+  6. FUNCION DE FITNESS (train.py)
+--------------------------------------------------------------------------------
+
+  Cada genoma juega 10 partidas en tablero 40x40. El fitness es el
+  PROMEDIO sobre esas partidas. Por partida se acumulan 4 senales:
+
+    +500.0   por cada comida consumida
+    +0.01    por cada paso sobrevivido
+    +1.0 * (dist_manhattan_antes - dist_manhattan_despues)
+             SHAPING de distancia: positivo si se acerca, negativo
+             si se aleja. Resuelve la senal escasa: la red recibe
+             feedback continuo en lugar de esperar a comer.
+    -300.0   PENALIZACION por elegir moverse contra el propio cuerpo
+             (auto-colision). Castiga especificamente la causa de
+             muerte mas evitable.
+
+  Condiciones especiales:
+
+    - Hambre: si pasan 320 pasos consecutivos sin comer (40^2 / 5),
+      la serpiente muere. Evita comportamientos circulares.
+
+    - Victoria: si llena el tablero completamente, recibe un bonus
+      adicional de 5000 (500 * 10) y termina la partida.
+
+
+--------------------------------------------------------------------------------
+  7. CONFIGURACION NEAT (src/snake_ai/config)
+--------------------------------------------------------------------------------
+
+  Poblacion y especiacion:
+    pop_size                = 200    Genomas por generacion
+    compatibility_threshold = 3.5    Distancia para nuevas especies
+    max_stagnation          = 30     Gens sin mejora antes de extinguir
+    species_elitism         = 1      Especie elite siempre preservada
+    elitism                 = 2      Genomas pasan sin mutacion
+
+  Mutacion estructural:
+    conn_add_prob           = 0.2
+    conn_delete_prob        = 0.2
+    node_add_prob           = 0.2
+    node_delete_prob        = 0.2
+
+  Mutacion de pesos:
+    weight_mutate_rate      = 0.8    Muy agresiva
+    weight_mutate_power     = 0.5
+    weight_replace_rate     = 0.1
+    bias_mutate_rate        = 0.7
+
+  Activaciones:
+    activation_default      = tanh
+    activation_options      = tanh, relu
+    activation_mutate_rate  = 0.05
+
+  Terminacion:
+    fitness_threshold       = 100000   No se alcanza en la practica
+    no_fitness_termination  = True     Corre hasta cierre manual
+
+
+--------------------------------------------------------------------------------
+  8. HIPERPARAMETROS (parametros.py)
+--------------------------------------------------------------------------------
+
+  Partidas y tablero:
+    partidas_por_tam            = 10              Partidas por genoma
+    rango_tam_tablero           = [40]            Tamano(s) de tablero
+    tam_tablero_gui             = (40, 40)        Tamano visual
+
+  Percepcion:
+    num_rayos                   = 8
+    dir_rotativas               = True            Rayos egocentricos
+    incluir_dist_pared          = True            +4 inputs
+    incluir_ultima_dir          = False           +2 inputs (off)
+    incluir_long_serp           = False           +1 input  (off)
+    long_temporal               = 1               Sin frame stacking
+
+  Fitness:
+    recompensa_comida           = 500.0
+    bonus_supervivencia         = 0.01
+    penalizacion_auto_colision  = 300.0
+    max_pasos_hambre            = 320             tablero^2 / 5
+
+  Checkpoints:
+    intervalo_checkpoint        = 25              Gens entre guardados
+    gens_parada_temprana        = 0               Desactivada
+
+  Paralelizacion:
+    num_nucleos = CPU // 4 si GUI activa
+    num_nucleos = CPU // 2 si headless
+
+  La carpeta de checkpoints codifica la configuracion en su nombre:
+    checkpoints-neat-snake-8-rays-True-False-True-False-1-v2
+
+  Esto evita mezclar checkpoints incompatibles cuando se cambia
+  la arquitectura de inputs.
+
+
+--------------------------------------------------------------------------------
+  9. INTERFAZ GRAFICA (neat_reporters/gui.py)
+--------------------------------------------------------------------------------
+
+  Implementa neat.reporting.BaseReporter y corre a 60 FPS en el hilo
+  principal mientras la evolucion ocurre en un hilo background.
+
+  Layout: ventana fija 1280x720
+    Panel izquierdo (44%):  tablero del mejor genoma jugando
+    Panel derecho  (56%):  estadisticas, graficas, estado en vivo
+
+  Tarjetas del panel derecho:
+
+    ENTRENAMIENTO
+      Generacion actual
+      FPS de la GUI
+      Tiempo promedio por generacion
+      Numero de especies activas
+
+    FITNESS HISTORICO
+      Grafica de los ultimos 60 puntos
+      Linea verde: mejor genoma por generacion
+      Linea ambar: promedio de la poblacion
+      Etiquetas: pico maximo y minimo en ventana
+
+    RENDIMIENTO
+      Mejor fitness historico
+      Promedio actual
+
+    ESTADO EN VIVO
+      Score actual y mejor score visual
+      Longitud de la serpiente
+      Direccion actual con flecha
+      Contador de muertes y victorias visuales
+      Barra de hambre (verde/ambar/rojo segun timer_comida / 320)
+
+  Boton "Ver Red Neuronal":
+    Llama a visualization.dibujar_red() que invoca Graphviz para
+    generar Digraph.svg con la topologia exacta del mejor genoma.
+
+  Estilo visual:
+    Paleta retro tipo terminal CRT (verde fosforo + ambar)
+    Tipografia Consolas
+    Tarjetas con borde verde y graficas con grilla tipo osciloscopio
+
+
+--------------------------------------------------------------------------------
+  10. FLUJO DE EJECUCION
+--------------------------------------------------------------------------------
+
+  python src/snake_ai/train.py
+      |
+      v
+  1.  Calcular num_inputs esperado segun parametros
+      8 * 3 + 4 + 2 = 30
+  2.  Validar contra config (falla rapido si hay mismatch)
+  3.  Buscar checkpoint mas reciente en carpeta_checkpoint
+        Si existe -> intentar cargar; si falla -> probar el anterior
+        Si no hay -> nueva poblacion de 200 genomas aleatorios
+  4.  Registrar reporters: StdOut, Statistics, Checkpointer, RegistradorCSV
+  5.  Crear ParallelEvaluator (CPU // 4 o // 2)
+  6.  Lanzar hilo de evolucion (daemon)
+        Por cada generacion:
+          a) Evaluar 200 genomas en paralelo
+          b) Cada genoma: 10 partidas, calcular fitness
+          c) NEAT cruza, muta y crea siguiente generacion
+          d) Guardar checkpoint cada 25 gens
+  7.  Hilo principal: GUI Pygame a 60 FPS
+        Cada nueva generacion: actualizar mejor_genoma visual
+        Cada frame: simular pasos del best, dibujar paneles
+  8.  Cierre de ventana:
+        Senal a hilo evolucion para guardar checkpoint y salir
+        pygame.quit()
+
+
+--------------------------------------------------------------------------------
+  11. STACK TECNICO
+--------------------------------------------------------------------------------
+
+  Lenguaje:           Python 3.11+
+  Framework NEAT:     neat-python
+  GUI:                pygame-ce + pygame_gui
+  Aceleracion:        Numba (@njit con cache=True)
+  Numerico:           NumPy
+  Visualizacion red:  Graphviz (opcional)
+  Graficas estat.:    Matplotlib (opcional)
+  Plataforma:         Windows / Linux / macOS
+
+
+--------------------------------------------------------------------------------
+  12. EVOLUCION DEL DISENO (decisiones tecnicas)
+--------------------------------------------------------------------------------
+
+  v1 (4 rayos absolutos, 14 inputs):
+    Percepcion en coordenadas globales. Funcionaba pero requeria que
+    la red aprendiera por separado patrones equivalentes en distintas
+    orientaciones (peligro al norte, peligro al sur, etc).
+
+  v2 (8 rayos rotativos, 30 inputs) -- VERSION ACTUAL:
+
+    1. Mas rayos (4 -> 8): mejor cobertura angular del entorno.
+       Captura obstaculos diagonales que los 4 cardinales perdian.
+
+    2. Rayos egocentricos (dir_rotativas=True): la red aprende patrones
+       relativos al movimiento, lo que generaliza mejor entre direcciones.
+
+    3. Separacion cuerpo/pared (1 -> 2 distancias por rayo): la red
+       puede modelar dos amenazas distintas con dinamicas diferentes.
+
+    4. Normalizacion 1/distancia (antes 1 - dist/diagonal): respuesta
+       hiperbolica concentra la atencion en peligros cercanos.
+
+    5. Shaping de distancia en fitness: la senal +500 por comer es muy
+       escasa al inicio. El shaping da feedback denso (+/- 1 por paso)
+       que acelera el aprendizaje temprano.
+
+    6. Penalizacion por auto-colision: castigo dirigido a la causa de
+       muerte mas evitable. La pared es facil de detectar; el cuerpo
+       requiere mas memoria espacial.
+
+    7. Fallback de movimiento (zigzag + flood fill): asegura que la
+       serpiente no muera por errores triviales de NEAT en estados
+       criticos. Permite que el aprendizaje se concentre en estrategia
+       en lugar de rescate.
+
+
+================================================================================
+  PARTE 2 — GUION DE EXPOSICION (5 minutos)
+================================================================================
+
+
+--------------------------------------------------------------------------------
+  ANTES DE EMPEZAR
+--------------------------------------------------------------------------------
+
+  - Tener corriendo: python src/snake_ai/train.py
+  - Ventana 1280x720 visible y simulando
+  - Si Graphviz esta instalado, probar el boton antes para evitar
+    fallos en vivo
+  - Tener a mano: numero de generacion actual y mejor fitness
+
+
+--------------------------------------------------------------------------------
+  [0:00] APERTURA  (~30 seg)
+--------------------------------------------------------------------------------
+
+  "Este proyecto entrena una inteligencia artificial para jugar Snake
+  de forma autonoma. Nadie le programo reglas: no se le dijo que hacer
+  frente a una pared, ni donde esta la comida, ni como evitar morder
+  su propio cuerpo. La IA descubrio todas esas estrategias sola, a
+  traves de miles de generaciones de evolucion."
+
+  *(Senalar la ventana con la simulacion corriendo)*
+
+  "Lo que ven aqui es la serpiente controlada por la red neuronal del
+  mejor genoma de la generacion actual, jugando en tiempo real."
+
+
+--------------------------------------------------------------------------------
+  [0:30] QUE ES NEAT  (~1 min)
+--------------------------------------------------------------------------------
+
+  "El algoritmo se llama NEAT: NeuroEvolution of Augmenting Topologies.
+  A diferencia del deep learning clasico, NEAT no usa backpropagation
+  ni un dataset con respuestas correctas. Evoluciona las redes
+  neuronales como la seleccion natural: mutacion, cruzamiento y
+  supervivencia del mas apto."
+
+  "Cada generacion funciona asi:
+
+    1. Partimos de 200 serpientes, cada una con su propia red neuronal.
+    2. Cada serpiente juega 10 partidas en un tablero de 40 por 40.
+    3. Calculamos un puntaje, llamado fitness, segun que tan bien jugo.
+    4. Las mejores se reproducen: sus redes se mezclan y mutan,
+       a veces ganando neuronas o conexiones nuevas.
+    5. Asi se forman las 200 redes de la siguiente generacion."
+
+  *(Senalar el panel derecho: generacion y especies)*
+
+  "En este momento llevamos la generacion [DECIR EL NUMERO QUE MUESTRA
+  LA GUI]. NEAT tambien agrupa las redes similares en 'especies' para
+  proteger las mutaciones nuevas antes de descartarlas, dandoles tiempo
+  a demostrar su valor."
+
+
+--------------------------------------------------------------------------------
+  [1:30] COMO VE LA SERPIENTE  (~1:15 min)
+--------------------------------------------------------------------------------
+
+  *(Senalar la serpiente en el panel izquierdo)*
+
+  "La serpiente no ve el tablero completo. Lanza 8 rayos desde su
+  cabeza usando el algoritmo de Bresenham para trazar cada linea
+  celda por celda."
+
+  "Y lo importante: estos rayos son EGOCENTRICOS. Rotan con la
+  direccion en la que se mueve la serpiente. El rayo cero siempre
+  apunta hacia adelante, no importa si va al norte o al este. Asi
+  la red aprende patrones relativos como 'hay peligro adelante' en
+  vez de absolutos como 'hay peligro al norte', lo que generaliza
+  mejor entre situaciones."
+
+  "Por cada rayo, la red recibe TRES numeros separados:
+
+    - Proximidad al cuerpo propio
+    - Proximidad a la pared
+    - Si hay comida en esa direccion (0 o 1)
+
+  Separar cuerpo y pared importa porque tienen significados distintos:
+  la pared es fija, el cuerpo cambia cada paso."
+
+  "Ademas recibe 4 distancias absolutas a cada borde del tablero, y
+  un vector que apunta directamente hacia donde esta la comida. En
+  total: 30 numeros entran a la red. La red devuelve 4 numeros, uno
+  por direccion, y la serpiente se mueve hacia el mas alto."
+
+
+--------------------------------------------------------------------------------
+  [2:45] COMO APRENDE — FUNCION DE FITNESS  (~45 seg)
+--------------------------------------------------------------------------------
+
+  "El fitness es lo unico que le decimos a la IA sobre si lo hizo bien
+  o mal. Tiene cuatro componentes:
+
+    +500 puntos por cada comida consumida (la senal dominante)
+    +0.01 puntos por cada paso vivo (incentivo a no morir)
+    +/- 1 punto por acercarse o alejarse de la comida cada paso
+    -300 puntos si elige chocar contra su propio cuerpo
+
+  El componente de acercamiento, llamado shaping, es importante:
+  comer es un evento raro al inicio, asi que sin esta senal continua
+  la red tardaria muchisimo en aprender hacia donde ir. Y la
+  penalizacion por auto-colision esta dirigida a la causa de muerte
+  mas evitable, porque chocarse contra paredes es facil de evitar
+  pero morder el propio cuerpo requiere memoria espacial."
+
+  "Ademas, si pasan 320 pasos sin comer, la serpiente muere de hambre.
+  Eso evita que aprenda a dar vueltas en circulos sin avanzar."
+
+
+--------------------------------------------------------------------------------
+  [3:30] DEMO EN VIVO  (~1 min)
+--------------------------------------------------------------------------------
+
+  *(Senalar la grafica del panel derecho)*
+
+  "La linea verde es el mejor fitness por generacion. La linea ambar
+  es el promedio de toda la poblacion. La brecha entre ambas indica
+  que tan diversa esta siendo la evolucion: si se cierra, la poblacion
+  se esta especializando; si se abre, hay exploracion activa."
+
+  *(Senalar el estado en vivo)*
+
+  "Aqui vemos el score actual, el mejor score historico que ha
+  alcanzado la red en la simulacion visual, su longitud, y una barra
+  de hambre que va de verde a rojo segun se acerca al limite de
+  inanicion."
+
+  *(Si Graphviz disponible: hacer clic en "Ver Red Neuronal")*
+
+  "Este boton genera la topologia actual del mejor genoma. Al inicio
+  de la evolucion eran 30 entradas conectadas parcialmente a 4 salidas,
+  sin neuronas ocultas. Con el tiempo, NEAT fue agregando neuronas y
+  conexiones donde beneficiaban al fitness. Lo que ven aqui es una
+  arquitectura que la evolucion diseno por si sola, sin que nadie
+  decidiera cuantas capas o neuronas deberia tener."
+
+
+--------------------------------------------------------------------------------
+  [4:30] CIERRE  (~30 seg)
+--------------------------------------------------------------------------------
+
+  "Ningun comportamiento que ven fue programado explicitamente. La
+  serpiente aprendio a evitar paredes, perseguir comida y manejar su
+  propio cuerpo solo a partir de repetir el ciclo de evolucion sobre
+  millones de partidas."
+
+  "El proyecto usa Python con neat-python para el algoritmo, Numba
+  para compilar el motor del juego y el raycasting a velocidad casi
+  nativa, y Pygame para la visualizacion en tiempo real. La evaluacion
+  de los 200 genomas corre en paralelo en varios nucleos para acelerar
+  el entrenamiento."
+
+
+--------------------------------------------------------------------------------
+  PREGUNTAS FRECUENTES — respuestas cortas
+--------------------------------------------------------------------------------
+
+  P: "Por que no usaron Q-learning o algun RL clasico?"
+  R: NEAT no necesita definir funcion de valor ni manejar el espacio
+     de estados explicitamente. Solo necesita un puntaje al final de
+     cada partida. Para Snake, donde hay millones de estados posibles,
+     eso simplifica mucho el diseno y evita problemas de
+     inestabilidad de DRL.
+
+  P: "Cuanto tarda una generacion?"
+  R: Depende del hardware. Con multiprocessing en varios nucleos,
+     entre 10 y 30 segundos por generacion.
+
+  P: "Puede llegar a completar el tablero?"
+  R: Tecnicamente si: el tablero tiene 40x40 = 1600 celdas. Aun no
+     ha ocurrido, pero el fitness sigue mejorando.
+
+  P: "Por que 8 rayos y no mas?"
+  R: Con 8 rayos el vector de entrada tiene 30 valores. Mas rayos
+     aumentan el espacio de busqueda exponencialmente y vuelven los
+     checkpoints actuales incompatibles. 8 da buena cobertura angular
+     (cada 45 grados) sin volver el problema intratable.
+
+  P: "Por que separar cuerpo y pared en la percepcion?"
+  R: Tienen dinamicas distintas. La pared es estatica y predecible;
+     el cuerpo crece y se mueve. La red aprende a tratarlos como
+     amenazas diferentes, lo que mejora la toma de decisiones.
+
+  P: "Que es el shaping de distancia?"
+  R: Una recompensa pequena (+/- 1) por cada paso que acerca o aleja
+     a la serpiente de la comida. Resuelve el problema de la senal
+     escasa: comer es raro al inicio, asi que sin shaping la red
+     tarda muchisimo en aprender hacia donde ir.
+
+  P: "Que pasa si la red elige una direccion que la mata?"
+  R: El selector tiene 5 niveles de fallback: si NEAT propone una
+     direccion suicida, intenta zigzag, luego flood fill (espacio
+     mas libre), luego cualquier dir. segura. Solo en el peor caso
+     deja que la red elija libremente.
+
+
+================================================================================
+  Fin del reporte  |  Snake AI con NEAT  |  Mayo 2026
+================================================================================

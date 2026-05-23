@@ -1,122 +1,37 @@
-# Snake NEAT
+# Snake NEAT AI
 
-Entrenamiento de una IA para jugar Snake usando **NEAT** (NeuroEvolution of Augmenting Topologies). La red neuronal evoluciona generación a generación sin aprendizaje supervisado — solo selección natural y mutación.
+Este proyecto es una implementación de Inteligencia Artificial que aprende a jugar al clásico juego de la Serpiente (Snake) desde cero, utilizando el algoritmo evolutivo **NEAT** (NeuroEvolution of Augmenting Topologies).
 
-![logo](data/readme-data/logo.PNG)
+## ¿Cómo funciona?
 
----
+El sistema utiliza principios de evolución biológica combinados con redes neuronales para enseñar a la serpiente a sobrevivir y comer manzanas. El proceso se divide en cuatro pasos principales:
 
-## Características
+1. **Percepción (Los "Ojos" de la Serpiente):** 
+   En cada instante, la serpiente lanza rayos visuales (como un radar) en 8 direcciones a su alrededor. Estos rayos miden la distancia hacia las paredes, hacia su propio cuerpo y detectan si hay comida en esa línea de visión. En total, la serpiente recoge 30 valores de su entorno.
+   
+2. **El Cerebro (Red Neuronal):** 
+   Los datos visuales entran a una red neuronal. Esta red procesa la información y emite 4 señales de salida, correspondientes a las direcciones (Arriba, Abajo, Izquierda, Derecha).
 
-- Evaluación paralela multi-núcleo para acelerar el entrenamiento.
-- GUI en tiempo real (Pygame) con simulación del mejor genoma de cada generación.
-- Sistema de percepción por **rayos** (raycasting) desde la cabeza de la serpiente.
-- Checkpoints automáticos con recuperación ante corrupción (fallback al anterior).
-- Visualización de la topología de la red neuronal (requiere Graphviz).
-- Parada temprana configurable por estancamiento del fitness.
+3. **Acción y Seguridad:**
+   La dirección con la señal más fuerte es la elegida. Antes de moverse, un sistema de seguridad evalúa la acción: si la IA decide hacer un movimiento suicida (como chocar instantáneamente contra su cuerpo), el sistema aplica algoritmos de respaldo (como *Zigzag* o *Flood Fill*) para intentar salvarla y darle más tiempo de aprendizaje.
 
----
+4. **Evolución y Selección Natural:**
+   - **Evaluación (Fitness):** A cada serpiente se le da una puntuación. Gana muchos puntos por comer (+500) y puntos menores por sobrevivir y acercarse a la comida. Pierde puntos si choca.
+   - **Reproducción:** Se evalúa a una población de 200 serpientes por generación. Las mejores sobreviven y se "reproducen", mezclando sus redes neuronales y sufriendo mutaciones aleatorias (se añaden nuevas conexiones o neuronas). Las peores son descartadas.
+   - ¡Con cada generación, las redes neuronales evolucionan y las serpientes se vuelven más inteligentes!
 
-## Instalación
+## Estructura del Proyecto
 
-**Requisitos:** Python 3.11+
+El proyecto está diseñado de forma modular para maximizar el rendimiento:
 
-```powershell
-# 1. Crear y activar entorno virtual
-python -m venv venv
-.\venv\Scripts\Activate.ps1
+*   **`lib/fast_snake/`**: El motor puro del juego. Está escrito en Python pero optimizado con **Numba** para compilarse a código máquina. Esto permite que el juego se ejecute a velocidades extremadamente altas, reduciendo drásticamente el tiempo de entrenamiento de la IA.
+*   **`src/snake_ai/`**: El núcleo de la inteligencia artificial. Aquí se maneja la configuración de NEAT (`config`), el ciclo de entrenamiento (`train.py`), el cálculo de la visión (`perception.py`) y la ejecución de los movimientos (`movement.py`).
+*   **`src/neat_reporters/`**: Los módulos visuales. Utiliza **Pygame** para mostrar gráficamente a la mejor serpiente de cada generación jugando en tiempo real, e incluye herramientas gráficas para visualizar el progreso de la evolución y la estructura del "cerebro" de la serpiente.
+*   **`checkpoints-*/`**: Aquí se guardan automáticamente los estados del entrenamiento. Permite pausar y reanudar el aprendizaje de la IA en cualquier momento sin perder el progreso.
 
-# 2. Instalar dependencias
-pip install -r src/requirements.txt
-```
+## Tecnologías Principales
 
-> **Opcional:** Graphviz para visualizar la red neuronal → `winget install graphviz`
-
----
-
-## Uso
-
-```powershell
-# Iniciar (o reanudar) el entrenamiento
-python src/snake_ai/train.py
-
-# Reiniciar desde Generación 0 (borra todos los checkpoints)
-python reset_evolution.py
-```
-
-El programa carga automáticamente el checkpoint más reciente. Si no existe ninguno, inicia desde cero.
-
----
-
-## Controles de la GUI
-
-| Acción | Descripción |
-|---|---|
-| Cerrar ventana | Detiene el entrenamiento de forma segura y guarda checkpoint final |
-| **Ver Red Neuronal** | Genera y abre el diagrama SVG de la topología del mejor genoma |
-
----
-
-## Percepción de la red
-
-La serpiente percibe su entorno mediante **4 rayos radiales** lanzados desde su cabeza. Cada rayo reporta:
-- Distancia al obstáculo más cercano (pared o cuerpo propio)
-- Si hay comida en esa dirección
-
-Entradas adicionales opcionales: distancias a las 4 paredes, dirección normalizada hacia la comida, última dirección, longitud de la serpiente.
-
----
-
-## Función de fitness
-
-Cada genoma juega **10 partidas** en un tablero de 40×40. El fitness es el promedio:
-
-| Evento | Valor |
-|---|---|
-| Comer comida | +500.0 |
-| Sobrevivir un paso | +0.01 |
-| Hambre (sin comer demasiados pasos) | Muerte |
-| Victoria (tablero lleno) | +5000.0 y fin |
-
----
-
-## Parámetros configurables
-
-Todos los hiperparámetros están en `src/snake_ai/parametros.py`:
-
-| Parámetro | Por defecto | Descripción |
-|---|---|---|
-| `partidas_por_tam` | `10` | Partidas por genoma por generación |
-| `habilitar_gui` | `True` | Activa/desactiva la GUI |
-| `num_rayos` | `4` | Rayos de visión (cambia `num_inputs`) |
-| `incluir_dist_pared` | `True` | +4 entradas: distancias a paredes |
-| `incluir_ultima_dir` | `False` | +2 entradas: última dirección |
-| `incluir_long_serp` | `False` | +1 entrada: longitud normalizada |
-| `long_temporal` | `1` | Frame stacking (1 = sin memoria) |
-| `recompensa_comida` | `500.0` | Puntos por comer |
-| `max_pasos_hambre` | `tablero² / 4` | Pasos máximos sin comer |
-| `intervalo_checkpoint` | `25` | Generaciones entre guardados |
-
-> Si cambias `num_rayos`, `incluir_*` o `long_temporal`, debes actualizar `num_inputs` en `src/snake_ai/config`. El programa lo valida al arrancar e imprime el valor correcto si hay discrepancia.
-
----
-
-## Arquitectura
-
-```
-snake-neat/
-├── src/
-│   ├── snake_ai/
-│   │   ├── train.py          # Punto de entrada: evolución + GUI en hilos paralelos
-│   │   ├── parametros.py     # Todos los hiperparámetros configurables
-│   │   ├── perception.py     # Vector de observación por raycasting (Numba)
-│   │   ├── movement.py       # Selección de dirección sin giros de 180°
-│   │   └── config            # Configuración NEAT (población, mutación, etc.)
-│   └── neat_reporters/
-│       ├── gui.py            # GUI Pygame + reporter en tiempo real
-│       └── visualization.py  # Gráficas de fitness, especies y topología de red
-├── lib/fast_snake/           # Motor Snake compilado con Numba (@njit)
-├── data/                     # Assets: fuentes, sonidos, imágenes
-├── docs/                     # Documentación del proyecto
-└── reset_evolution.py        # Reinicia el entrenamiento borrando checkpoints
-```
+*   **Python**: Lenguaje principal.
+*   **NEAT-Python**: Librería para el algoritmo neuro-evolutivo.
+*   **Numba y Numpy**: Para cálculos matemáticos acelerados y simulación ultrarrápida del juego.
+*   **Pygame**: Para el renderizado gráfico de la simulación.

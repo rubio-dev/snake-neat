@@ -18,15 +18,15 @@ for ruta_rel in ['src', 'lib/fast_snake/src', 'data']:
 
 import neat # Framework NEAT-Python para evolución neuroevolutiva
 import numpy # Arrays numéricos para activación de la red
-from fast_snake.fast_snake import generate_game, move_snake # Motor de juego Snake compilado con Numba
+from fast_snake.fast_snake import generate_game, move_snake, TileTypes # Motor de juego Snake compilado con Numba
 from neat_reporters import gui # Reporter con GUI Pygame
 from neat_reporters import visualization # Visualización de redes y estadísticas
 from snake_ai.perception import obtener_entradas # Vector de observación para la red
 from snake_ai.movement import elegir_direccion # Selección de dirección sin giros de 180°
 from snake_ai.parametros import ( # Hiperparámetros de entrenamiento y configuración
     partidas_por_tam, habilitar_gui, rango_tam_tablero, tam_tablero_gui,
-    num_rayos, incluir_ultima_dir, incluir_long_serp, incluir_dist_pared,
-    long_temporal, num_nucleos, recompensa_comida, bonus_supervivencia,
+    num_rayos, dir_rotativas, incluir_ultima_dir, incluir_long_serp, incluir_dist_pared,
+    long_temporal, num_nucleos, recompensa_comida, bonus_supervivencia, penalizacion_auto_colision,
     max_pasos_hambre, intervalo_checkpoint, gens_parada_temprana, carpeta_checkpoint,
 )
 
@@ -41,7 +41,7 @@ if not shutil.which('dot'):
 # FUNCIONES
 # Calcula el número total de entradas que debe recibir la red según la configuración actual
 def calcular_tam_entradas():
-    tam = num_rayos * 2 # Distancias a obstáculos + banderas de comida por rayo
+    tam = num_rayos * 3 # dist_cuerpo + dist_pared + food_flag por rayo
 
     if incluir_dist_pared:
         tam += 4
@@ -80,6 +80,8 @@ def evaluar_genoma(genoma, config):
                 n_rayos = num_rayos,
                 incluir_long_serp = incluir_long_serp,
                 incluir_dist_pared = incluir_dist_pared,
+                dir_rotativas = dir_rotativas,
+                ultima_dir = ultima_dir,
             )
 
             if incluir_ultima_dir:
@@ -91,10 +93,13 @@ def evaluar_genoma(genoma, config):
             )
 
             while not muerto:
-                salidas = red.activate(numpy.array(entradas_temporales).flatten())
-                direccion = elegir_direccion(salidas, ultima_dir)
-                ultima_dir = direccion
+                salidas       = red.activate(numpy.array(entradas_temporales).flatten())
+                cabeza_antes  = juego[2][-1]
+                direccion     = elegir_direccion(salidas, ultima_dir, juego[0], cabeza_antes)
+                ultima_dir    = direccion
 
+                pos_comida_antes = juego[1]
+                tablero_antes = juego[0]
                 datos_serp, muerto, pos_comida, comio = move_snake(juego[0], juego[2], direccion, juego[1])
                 juego = (juego[0], pos_comida, datos_serp)
 
@@ -111,8 +116,19 @@ def evaluar_genoma(genoma, config):
                 elif not muerto:
                     fitness_partida += bonus_supervivencia
                     timer_comida += 1
+                    if pos_comida_antes != (-1, -1):
+                        nueva_cabeza = datos_serp[-1]
+                        dist_antes   = abs(int(cabeza_antes[0]) - pos_comida_antes[0]) + abs(int(cabeza_antes[1]) - pos_comida_antes[1])
+                        dist_despues = abs(int(nueva_cabeza[0]) - pos_comida_antes[0]) + abs(int(nueva_cabeza[1]) - pos_comida_antes[1])
+                        fitness_partida += (dist_antes - dist_despues) * 1.0
+                else:
+                    nr = int(cabeza_antes[0]) + direccion[0]
+                    nc = int(cabeza_antes[1]) + direccion[1]
+                    if (0 <= nr < tablero_antes.shape[0] and 0 <= nc < tablero_antes.shape[1]
+                            and tablero_antes[nr, nc] == TileTypes.SNAKE_BODY.value):
+                        fitness_partida -= penalizacion_auto_colision
 
-                if timer_comida > max_pasos_hambre:
+                if timer_comida >= max_pasos_hambre:
                     muerto = True
 
                 if not muerto:
@@ -121,6 +137,8 @@ def evaluar_genoma(genoma, config):
                         n_rayos = num_rayos,
                         incluir_long_serp = incluir_long_serp,
                         incluir_dist_pared = incluir_dist_pared,
+                        dir_rotativas = dir_rotativas,
+                        ultima_dir = ultima_dir,
                     )
 
                     if incluir_ultima_dir:
@@ -208,7 +226,7 @@ def ejecutar(ruta_config):
                 print(f"Checkpoint '{archivo_checkpoint}' cargado.")
 
                 break
-            except (EOFError, Exception) as e:
+            except Exception as e:
                 print(f"Error en '{archivo_checkpoint}': {e}. Probando anterior...")
 
     if poblacion is None:
@@ -288,6 +306,7 @@ def ejecutar(ruta_config):
             incluir_long_serp = incluir_long_serp,
             incluir_dist_pared = incluir_dist_pared,
             incluir_ultima_dir = incluir_ultima_dir,
+            dir_rotativas = dir_rotativas,
             long_temporal = long_temporal,
             max_pasos_hambre = max_pasos_hambre,
         )

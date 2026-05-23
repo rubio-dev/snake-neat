@@ -9,8 +9,8 @@ rango_tam_tablero = [40] # Tamaños de tablero sobre los que se evalúa cada gen
 tam_tablero_gui = (40, 40) # Tamaño del tablero en la simulación visual de la GUI
 
 # Percepción de la red (cambios aquí requieren actualizar num_inputs en el archivo config)
-num_rayos = 4 # Rayos de visión radiales desde la cabeza (+2 inputs por rayo)
-dir_rotativas = False # True: rayos orientados relativos a la dirección de movimiento actual
+num_rayos = 8 # Rayos de visión radiales desde la cabeza (+2 inputs por rayo)
+dir_rotativas = True  # True: rayos orientados relativos a la dirección de movimiento actual
 incluir_ultima_dir = False # True: añade (dx, dy) de la última dirección (+2 inputs)
 incluir_long_serp = False # True: añade longitud normalizada de la serpiente (+1 input)
 incluir_dist_pared = True # True: añade las 4 distancias normalizadas a las paredes (+4 inputs)
@@ -25,7 +25,8 @@ else:
 # Fitness
 recompensa_comida = 500.0 # Señal dominante: recompensa por cada pieza de comida consumida
 bonus_supervivencia = 0.01 # Incentivo mínimo por sobrevivir (debe ser menor que recompensa_comida)
-max_pasos_hambre = int(tam_tablero_gui[0] ** 2 // 4) # Pasos máximos sin comer antes de morir
+penalizacion_auto_colision = 300.0 # Penalización por morir chocando contra el propio cuerpo
+max_pasos_hambre = int(tam_tablero_gui[0] ** 2 // 5) # Pasos máximos sin comer antes de morir
 
 # Checkpoints
 intervalo_checkpoint = 25 # Generaciones entre guardados de checkpoint automático

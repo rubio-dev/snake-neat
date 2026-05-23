@@ -1,78 +1,87 @@
 import time # Medición de tiempos por generación
 import collections # deque para buffer temporal y historial de fitness
 import pathlib # Rutas para localizar recursos de datos
+import threading # Lock para sincronizar acceso a mejor_genoma entre hilos
 
 import neat # Tipos de red neuronal y BaseReporter
 import numpy # Arrays para activar la red neuronal
 import pygame # Ventana, eventos y renderizado 2D
-import pygame_gui # Botones y gestor de UI con temas
 
 from fast_snake.fast_snake import generate_game, move_snake, render # Motor de juego Snake
 from neat_reporters.visualization import dibujar_red # Generación del diagrama de la red neuronal
 from snake_ai.movement import elegir_direccion # Selección de dirección sin giros de 180°
 from snake_ai.perception import obtener_entradas # Vector de observación para la red
 
-# VARIABLES GLOBALES
-color_fondo = (5, 8, 5) # Negro terminal
-color_panel = (10, 16, 10) # Verde militar oscuro
-color_tarjeta = (14, 22, 14) # Panel ligeramente más claro
-color_borde = (0, 140, 0) # Borde verde
-color_acento = (0, 255, 65) # Verde fósforo (terminal bright)
-color_verde = (57, 255, 20) # Verde neón
-color_amarillo = (255, 176, 0) # Ámbar
-color_rojo = (255, 40, 40) # Rojo caliente
-color_texto = (160, 255, 160) # Fósforo tenue
-color_apagado = (55, 120, 55) # Etiquetas verdes oscuras
-color_tenue = (25, 45, 25) # Separadores muy tenues
+# VARIABLES GLOBALES — Paleta Synthwave / Outrun
+color_fondo    = (8,    4,  16)  # Fondo principal — negro violáceo
+color_panel    = (12,   6,  24)  # Fondo de paneles
+color_tarjeta  = (18,  10,  36)  # Interior de tarjetas
+color_borde    = (100,  0, 160)  # Borde — púrpura neón
+color_sep      = (28,   8,  52)  # Separadores tenues
+color_acento   = (255,  0, 128)  # Rosa neón — acento principal
+color_cian     = (0,  240, 255)  # Cian eléctrico — secundario
+color_oro      = (255, 210,   0) # Amarillo neón — logros
+color_purpura  = (180,  0, 255)  # Púrpura eléctrico
+color_texto    = (220, 195, 255) # Lavanda claro — texto principal
+color_apagado  = (100,  55, 145) # Etiquetas tenues
+color_dim      = (12,   4,  26)  # Relleno muy oscuro
+color_rojo     = (255,  50,  90) # Rojo neón — muertes
 
-mapa_colores_tablero = { # Paleta retro para el tablero de juego
-    0:   (0,   0,   0),
-    11:  (0,   255, 65),
-    12:  (0,   160, 40),
-    13:  (35,  45,  35),
-    100: (255, 176, 0),
+mapa_colores_tablero = {
+    0:   (4,    0,   8),
+    11:  (255,   0, 128),
+    12:  (150,   0,  75),
+    13:  (18,    6,  36),
+    100: (0,   240, 255),
 }
 
-radio_esquina = 0 # Sin esquinas redondeadas (estilo retro cuadrado)
-margen = 16 # Margen exterior entre paneles
-margen_mini = 8 # Margen interior dentro de tarjetas
+radio_esquina = 4
+margen = 12
+margen_mini = 8
 
 # FUNCIONES
-# Dibuja un rectángulo con borde opcional
+# Borde neon con glow simulado por capas
+def rect_neon(superficie, color_bg, rect, color_borde_neon, radio = radio_esquina):
+    pygame.draw.rect(superficie, color_bg, rect, border_radius = radio)
+    glow = tuple(c // 5 for c in color_borde_neon)
+    pygame.draw.rect(superficie, glow, rect.inflate(4, 4), 2, border_radius = radio + 2)
+    pygame.draw.rect(superficie, color_borde_neon, rect, 1, border_radius = radio)
+
+# Rectángulo simple con borde opcional
 def rect_redondeado(superficie, color, rect, radio = radio_esquina, borde = None, grosor_borde = 1):
-    pygame.draw.rect(superficie, color, rect)
+    pygame.draw.rect(superficie, color, rect, border_radius = radio)
 
     if borde:
-        pygame.draw.rect(superficie, borde, rect, grosor_borde)
+        pygame.draw.rect(superficie, borde, rect, grosor_borde, border_radius = radio)
 
-# Dibuja una barra de progreso horizontal segmentada
+# Barra de progreso segmentada
 def barra_progreso(superficie, x, y, w, h, valor, max_val, color_relleno):
     ratio = max(0.0, min(1.0, valor / max_val)) if max_val else 0.0
-    num_segs = 20
+    num_segs = 24
     espacio = 2
     ancho_seg = max(1, (w - 2 - espacio * (num_segs - 1)) // num_segs)
     rellenos = int(ratio * num_segs)
 
-    pygame.draw.rect(superficie, (8, 14, 8), pygame.Rect(x, y, w, h))
+    pygame.draw.rect(superficie, color_dim, pygame.Rect(x, y, w, h), border_radius = 2)
 
     for i in range(num_segs):
         bx = x + 1 + i * (ancho_seg + espacio)
-        color_seg = color_relleno if i < rellenos else (18, 32, 18)
+        color_seg = color_relleno if i < rellenos else (24, 10, 48)
         pygame.draw.rect(superficie, color_seg, pygame.Rect(bx, y + 1, ancho_seg, h - 2))
 
-    pygame.draw.rect(superficie, color_borde, pygame.Rect(x, y, w, h), 1)
+    glow_b = tuple(c // 5 for c in color_relleno)
+    pygame.draw.rect(superficie, glow_b,       pygame.Rect(x - 1, y - 1, w + 2, h + 2), 1, border_radius = 3)
+    pygame.draw.rect(superficie, color_relleno, pygame.Rect(x, y, w, h), 1, border_radius = 2)
 
-# Dibuja una gráfica de línea compacta con área sombreada; acepta una segunda serie opcional
-def mini_grafica(superficie, rect, datos, color = color_acento, datos2 = None, color2 = color_amarillo):
+# Gráfica de línea con área sombreada y serie secundaria opcional
+def mini_grafica(superficie, rect, datos, color = color_acento, datos2 = None, color2 = color_cian):
+    rect_neon(superficie, color_tarjeta, rect, color_borde)
+
     if len(datos) < 2:
-        rect_redondeado(superficie, color_tarjeta, rect, borde = color_borde)
-
         return
 
-    rect_redondeado(superficie, color_tarjeta, rect, borde = color_borde)
-    x0, y0, w, h = rect.x + 4, rect.y + 4, rect.width - 8, rect.height - 8
+    x0, y0, w, h = rect.x + 6, rect.y + 6, rect.width - 12, rect.height - 12
 
-    # Escalar ambas series en el mismo rango Y para que sean comparables
     todos_vals = list(datos) + (list(datos2) if datos2 and len(datos2) >= 2 else [])
     min_val, max_val = min(todos_vals), max(todos_vals)
 
@@ -82,26 +91,49 @@ def mini_grafica(superficie, rect, datos, color = color_acento, datos2 = None, c
     def a_punto(i, v, n):
         return x0 + int(i / (n - 1) * w), y0 + h - int((v - min_val) / (max_val - min_val) * h)
 
+    for i_linea in range(1, 5):
+        y_linea = y0 + int(i_linea * h / 5)
+        pygame.draw.line(superficie, color_sep, (x0, y_linea), (x0 + w, y_linea), 1)
+
     puntos = [a_punto(i, v, len(datos)) for i, v in enumerate(datos)]
 
-    # Líneas de grilla estilo osciloscopio
-    for i_linea in range(1, 4):
-        y_linea = y0 + int(i_linea * h / 4)
-        pygame.draw.line(superficie, color_tenue, (x0, y_linea), (x0 + w, y_linea), 1)
-
-    pygame.draw.line(superficie, color_tenue, (x0, y0 + h), (x0 + w, y0 + h), 1)
-
-    # Serie secundaria (promedio) dibujada primero para quedar debajo
     if datos2 and len(datos2) >= 2:
         puntos2 = [a_punto(i, v, len(datos2)) for i, v in enumerate(datos2)]
         pygame.draw.lines(superficie, color2, False, puntos2, 1)
         pygame.draw.circle(superficie, color2, puntos2[-1], 2)
 
-    # Serie principal (mejor) con área sombreada
     poligono = puntos + [(puntos[-1][0], y0 + h), (puntos[0][0], y0 + h)]
-    pygame.draw.polygon(superficie, tuple(max(0, c - 160) for c in color), poligono)
+    pygame.draw.polygon(superficie, tuple(max(0, c - 175) for c in color), poligono)
     pygame.draw.lines(superficie, color, False, puntos, 2)
     pygame.draw.circle(superficie, color_texto, puntos[-1], 3)
+
+# Grilla perspectiva estilo Outrun en un rect
+def grilla_synthwave(superficie, rect, color_linea):
+    x0 = rect.centerx
+    y0 = rect.y
+    x1, y1 = rect.x,     rect.bottom
+    x2, y2 = rect.right, rect.bottom
+
+    for i in range(9):
+        t = i / 8
+        pygame.draw.line(superficie, color_linea,
+            (int(x1 + (x0 - x1) * t), int(y1 + (y0 - y1) * t)),
+            (int(x2 + (x0 - x2) * t), int(y2 + (y0 - y2) * t)), 1)
+
+    for j in range(1, 7):
+        t = j / 6
+        pygame.draw.line(superficie, color_linea,
+            (int(x1 + (x0 - x1) * t), int(y1 + (y0 - y1) * t)),
+            (int(x2 + (x0 - x2) * t), int(y2 + (y0 - y2) * t)), 1)
+
+# Mini tarjeta con etiqueta arriba y valor grande centrado
+def mini_tarjeta(superficie, rect, fuentes, etiqueta, valor, col_valor):
+    rect_neon(superficie, color_tarjeta, rect, tuple(c // 3 for c in col_valor))
+    lbl_s = fuentes['tiny'].render(etiqueta, True, color_apagado)
+    val_s = fuentes['num_sm'].render(str(valor), True, col_valor)
+    mid_x = rect.x + rect.width // 2
+    superficie.blit(lbl_s, (mid_x - lbl_s.get_width() // 2, rect.y + 5))
+    superficie.blit(val_s, (mid_x - val_s.get_width() // 2, rect.y + 5 + lbl_s.get_height() + 3))
 
 # CLASES
 class ReportadorPygame(neat.reporting.BaseReporter):
@@ -114,6 +146,7 @@ class ReportadorPygame(neat.reporting.BaseReporter):
         incluir_ultima_dir = False,
         incluir_dist_pared = False,
         incluir_long_serp = False,
+        dir_rotativas = False,
         long_temporal = 1,
         max_pasos_hambre = None,
         fps_limite = 60,
@@ -125,6 +158,7 @@ class ReportadorPygame(neat.reporting.BaseReporter):
         self.incluir_ultima_dir = incluir_ultima_dir
         self.incluir_dist_pared = incluir_dist_pared
         self.incluir_long_serp = incluir_long_serp
+        self.dir_rotativas = dir_rotativas
         self.long_temporal = long_temporal
         self.max_pasos_hambre = max_pasos_hambre if max_pasos_hambre is not None else int(tam_tablero[0] ** 2 // 4)
         self.fps_limite = fps_limite
@@ -138,15 +172,30 @@ class ReportadorPygame(neat.reporting.BaseReporter):
         self.tiempos_gen = []
         self.historial_fitness = collections.deque(maxlen = 60)
         self.historial_fitness_prom = collections.deque(maxlen = 60)
+        self.mejor_fitness_global = 0.0
+        self._lock_genoma = threading.Lock()
+        self._genoma_cache = None
+        self._red_cache    = None
+        self._muertes_gui  = 0
+        self._victorias_gui = 0
+        self._mejor_score_gui = 0
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        del state['_lock_genoma']
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._lock_genoma = threading.Lock()
 
         self._genoma_cache = None
         self._red_cache = None
-
         self._muertes_gui = 0
         self._victorias_gui = 0
         self._mejor_score_gui = 0
 
-    # Callbacks del ciclo NEAT (nombres en inglés requeridos por la interfaz de neat-python)
+    # Callbacks del ciclo NEAT (nombres en inglés requeridos por neat-python)
     def start_generation(self, generation):
         self.generacion = generation
         self.tiempo_ini_gen = time.time()
@@ -161,11 +210,14 @@ class ReportadorPygame(neat.reporting.BaseReporter):
     def post_evaluate(self, config, population, species, mejor_genoma):
         aptitudes = [c.fitness for c in population.values()]
         self.fitness_prom = sum(aptitudes) / len(aptitudes) if aptitudes else 0.0
-        self.mejor_genoma = mejor_genoma
+        with self._lock_genoma:
+            self.mejor_genoma = mejor_genoma
         self.historial_fitness.append(mejor_genoma.fitness)
         self.historial_fitness_prom.append(self.fitness_prom)
 
-    # Crea un juego nuevo e inicializa el buffer temporal a ceros
+        if mejor_genoma.fitness > self.mejor_fitness_global:
+            self.mejor_fitness_global = mejor_genoma.fitness
+
     def _nuevo_juego(self):
         juego = generate_game(game_size = self.tam_tablero)
         s = obtener_entradas(
@@ -173,6 +225,8 @@ class ReportadorPygame(neat.reporting.BaseReporter):
             n_rayos = self.num_rayos,
             incluir_long_serp = self.incluir_long_serp,
             incluir_dist_pared = self.incluir_dist_pared,
+            dir_rotativas = self.dir_rotativas,
+            ultima_dir = (0, 0),
         )
 
         if self.incluir_ultima_dir:
@@ -185,203 +239,236 @@ class ReportadorPygame(neat.reporting.BaseReporter):
 
         return juego, temporal
 
-    # Dibuja el panel derecho completo: estadísticas, gráfica de fitness y estado en vivo
-    def _dibujar_panel_stats(self, superficie, panel_rect, fuentes, timer_comida, visual_score, long_serp, ultima_dir, reloj):
-        f_hdr = fuentes['hdr']
-        f_eti = fuentes['lbl']
-        f_val = fuentes['val']
-        f_mini = fuentes['tiny']
+    def _dibujar_header(self, ventana, fuentes, fps, estado_evo):
+        SW       = ventana.get_width()
+        HEADER_H = 56
 
+        pygame.draw.rect(ventana, color_panel, pygame.Rect(0, 0, SW, HEADER_H))
+
+        # Línea neon inferior con glow
+        pygame.draw.line(ventana, tuple(c // 6 for c in color_acento), (0, HEADER_H - 3), (SW, HEADER_H - 3), 1)
+        pygame.draw.line(ventana, color_acento,                        (0, HEADER_H - 1), (SW, HEADER_H - 1), 1)
+        pygame.draw.line(ventana, tuple(c // 6 for c in color_acento), (0, HEADER_H + 1), (SW, HEADER_H + 1), 1)
+
+        snake_s = fuentes['titulo'].render("SNAKE ", True, color_acento)
+        neat_s  = fuentes['titulo'].render("NEAT",   True, color_texto)
+        ventana.blit(snake_s, (margen * 2, 14))
+        ventana.blit(neat_s,  (margen * 2 + snake_s.get_width(), 14))
+
+        evaluando = estado_evo.get('evaluando', False)
+        mejor_f   = self.mejor_fitness_global
+
+        partes = [
+            ("",      "[EVAL]" if evaluando else "[VIVO]", color_oro if evaluando else color_cian),
+            ("MEJOR", f"{mejor_f:,.0f}",                   color_oro),
+            ("FPS",   f"{int(fps)}",                       color_cian if fps >= 55 else color_acento),
+            ("ESP",   f"{self.num_especies}",              color_purpura),
+            ("GEN",   f"{self.generacion:,}",              color_acento),
+        ]
+
+        sep_s  = fuentes['tiny'].render("  |  ", True, color_sep)
+        x_curr = SW - margen * 2
+
+        for etq, val, col in partes:
+            val_s = fuentes['num_header'].render(val, True, col)
+            x_curr -= val_s.get_width()
+            ventana.blit(val_s, (x_curr, 22))
+
+            if etq:
+                etq_s = fuentes['tiny'].render(etq, True, color_apagado)
+                ventana.blit(etq_s, (x_curr, 9))
+
+            x_curr -= sep_s.get_width()
+            ventana.blit(sep_s, (x_curr, 22))
+
+    def _dibujar_panel_stats(self, superficie, panel_rect, fuentes, timer_comida, visual_score, long_serp, ultima_dir):
         x = panel_rect.x + margen
         y = panel_rect.y + margen
         w = panel_rect.width - margen * 2
-        reserva_btn = 58
 
-        # Helper: fila "Etiqueta ··· Valor"
-        def fila(ry, etiqueta, valor, color_v = color_texto, alto = 20):
-            superficie.blit(f_eti.render(etiqueta, True, color_apagado), (x + margen_mini, ry))
-            val_s = f_val.render(str(valor), True, color_v)
-            superficie.blit(val_s, (x + w - val_s.get_width() - margen_mini, ry))
-
-            return alto
-
-        # Helper: encabezado de sección estilo terminal
-        def seccion(ry, titulo):
-            t = f_hdr.render(f"-- {titulo} --", True, color_acento)
+        def seccion(ry, titulo, col = color_acento):
+            t = fuentes['hdr'].render(titulo, True, col)
             superficie.blit(t, (x, ry))
+            lx = x + t.get_width() + 8
+            pygame.draw.line(superficie, color_sep, (lx, ry + t.get_height() // 2), (x + w, ry + t.get_height() // 2), 1)
+            return t.get_height() + 6
 
-            return t.get_height() + 4
+        # ── GENERACIÓN ─────────────────────────────────────────────
+        y += seccion(y, "GENERACION")
+        gen_s = fuentes['num_xl'].render(f"{self.generacion:,}", True, color_cian)
+        superficie.blit(gen_s, (x + w // 2 - gen_s.get_width() // 2, y))
+        y += gen_s.get_height() + 6
 
-        # Tarjeta: entrenamiento
-        y += seccion(y, "ENTRENAMIENTO")
-        rect_redondeado(superficie, color_tarjeta, pygame.Rect(x, y, w, 88), borde = color_borde)
-        cy = y + margen_mini
-        cy += fila(cy, "Generación", self.generacion, color_verde)
-        cy += fila(cy, "FPS", f"{int(reloj.get_fps())}")
-        cy += fila(cy, "Tiempo / gen", f"{self.tiempo_prom_gen:.2f} s", color_amarillo)
-        fila(cy, "Especies", self.num_especies)
-        y += 88 + 12
+        # Fila de métricas: ESPECIES · T/GEN · FPS
+        meta_items = [
+            (f"{self.num_especies}",         "ESPECIES", color_purpura),
+            (f"{self.tiempo_prom_gen:.1f}s", "T / GEN",  color_texto),
+        ]
+        col_w = w // len(meta_items)
 
-        # Tarjeta: gráfica de fitness histórico
-        y += seccion(y, "FITNESS HISTÓRICO")
-        g_rect = pygame.Rect(x, y, w, 72)
+        for i_m, (val_m, lbl_m, col_m) in enumerate(meta_items):
+            cx = x + i_m * col_w + col_w // 2
+            v_s = fuentes['num_sm'].render(val_m, True, col_m)
+            l_s = fuentes['tiny'].render(lbl_m,  True, color_apagado)
+            superficie.blit(v_s, (cx - v_s.get_width() // 2, y))
+            superficie.blit(l_s, (cx - l_s.get_width() // 2, y + v_s.get_height() + 2))
+
+        y += fuentes['num_sm'].size("0")[1] + fuentes['tiny'].size("0")[1] + 16
+
+        # ── FITNESS HISTÓRICO ──────────────────────────────────────
+        y += seccion(y, "FITNESS HISTORICO", color_cian)
+        graf_h = 100
+        g_rect = pygame.Rect(x, y, w, graf_h)
         mini_grafica(superficie, g_rect, self.historial_fitness, datos2 = self.historial_fitness_prom)
-        superficie.blit(f_mini.render("mejor", True, color_acento), (x + 6, y + 4))
-        superficie.blit(f_mini.render("promedio", True, color_amarillo), (x + 6 + f_mini.size("mejor")[0] + 8, y + 4))
 
         if self.historial_fitness:
-            pico_s = f_mini.render(f"↑ {max(self.historial_fitness):.0f}", True, color_verde)
-            superficie.blit(pico_s, (x + w - pico_s.get_width() - 8, y + 4))
-            min_s = f_mini.render(f"↓ {min(self.historial_fitness):.0f}", True, color_apagado)
-            superficie.blit(min_s, (x + 6, y + 72 - min_s.get_height() - 4))
+            pico_s = fuentes['tiny'].render(f"mejor  {max(self.historial_fitness):,.0f}", True, color_acento)
+            prom_s = fuentes['tiny'].render(f"prom   {self.fitness_prom:,.0f}",           True, color_cian)
+            superficie.blit(pico_s, (x + w - pico_s.get_width() - 6, y + 5))
+            superficie.blit(prom_s, (x + 6,                           y + 5))
 
-        y += 72 + 12
+        y += graf_h + 12
 
-        # Tarjeta: rendimiento del batch
-        y += seccion(y, "RENDIMIENTO")
-        rect_redondeado(superficie, color_tarjeta, pygame.Rect(x, y, w, 68), borde = color_borde)
+        # ── RENDIMIENTO: 2 tarjetas ────────────────────────────────
+        y += seccion(y, "RENDIMIENTO", color_oro)
         mejor_f = self.mejor_genoma.fitness if self.mejor_genoma else 0
-        cy = y + margen_mini
-        cy += fila(cy, "Mejor histórico", f"{mejor_f:,.0f}", color_verde)
-        fila(cy, "Promedio actual", f"{self.fitness_prom:,.0f}", color_amarillo)
-        y += 68 + 12
+        card_h  = 50
+        col_w_r = w // 2
 
-        # Tarjeta: estado en vivo
-        restante = panel_rect.bottom - reserva_btn - y - 12
-        y += seccion(y, "ESTADO EN VIVO")
-        rect_redondeado(superficie, color_tarjeta, pygame.Rect(x, y, w, max(110, restante - 12)), borde = color_borde)
+        mini_tarjeta(superficie, pygame.Rect(x,               y, col_w_r - 4, card_h), fuentes, "MEJOR",    f"{mejor_f:,.0f}",          color_oro)
+        mini_tarjeta(superficie, pygame.Rect(x + col_w_r, y, col_w_r - 4, card_h), fuentes, "PROMEDIO", f"{self.fitness_prom:,.0f}", color_cian)
+        y += card_h + 14
 
+        # ── EN VIVO: grid 3x2 de mini tarjetas ────────────────────
+        y += seccion(y, "EN VIVO", color_purpura)
+
+        mapa_dir = {(0, 1): "->DER", (0, -1): "<-IZQ", (1, 0): "v ABA", (-1, 0): "^ ARR"}
+
+        live_grid = [
+            ("SCORE",    str(visual_score),             color_acento),
+            ("MEJOR",    str(self._mejor_score_gui),    color_oro),
+            ("LONGITUD", str(long_serp),                color_texto),
+            ("DIRECCION", mapa_dir.get(ultima_dir, "--"), color_cian),
+            ("MUERTES",  str(self._muertes_gui),        color_rojo),
+            ("VICTORIAS", str(self._victorias_gui),     color_oro),
+        ]
+
+        cols_grid = 3
+        gap       = 5
+        card_w    = (w - gap * (cols_grid - 1)) // cols_grid
+        card_h_sm = 46
+
+        for idx, (lbl_g, val_g, col_g) in enumerate(live_grid):
+            fila  = idx // cols_grid
+            col_i = idx % cols_grid
+            rx = x + col_i * (card_w + gap)
+            ry = y + fila * (card_h_sm + gap)
+            mini_tarjeta(superficie, pygame.Rect(rx, ry, card_w, card_h_sm), fuentes, lbl_g, val_g, col_g)
+
+        y += 2 * (card_h_sm + gap) + 8
+
+        # ── HAMBRE ─────────────────────────────────────────────────
         ratio_hambre = min(1.0, timer_comida / self.max_pasos_hambre) if self.max_pasos_hambre else 0.0
-        color_hambre = color_verde if ratio_hambre < 0.5 else (color_amarillo if ratio_hambre < 0.8 else color_rojo)
-        badge_hambre = "Normal" if ratio_hambre < 0.5 else ("Alerta" if ratio_hambre < 0.8 else "Crítico")
+        color_hambre = color_cian if ratio_hambre < 0.5 else (color_oro if ratio_hambre < 0.8 else color_rojo)
+        badge        = "OK" if ratio_hambre < 0.5 else ("ALERTA" if ratio_hambre < 0.8 else "CRITICO")
 
-        mapa_dir = {(0, 1): "→ Derecha", (0, -1): "← Izquierda", (1, 0): "↓ Abajo", (-1, 0): "↑ Arriba"}
+        l_s = fuentes['tiny'].render("HAMBRE", True, color_apagado)
+        b_s = fuentes['tiny'].render(badge,    True, color_hambre)
+        superficie.blit(l_s, (x + margen_mini,                       y))
+        superficie.blit(b_s, (x + w - b_s.get_width() - margen_mini, y))
+        y += l_s.get_height() + 4
+        barra_progreso(superficie, x, y, w, 12, timer_comida, self.max_pasos_hambre, color_hambre)
 
-        cy = y + margen_mini
-        cy += fila(cy, "Score actual", visual_score, color_verde)
-        cy += fila(cy, "Mejor score", self._mejor_score_gui, color_acento)
-        cy += fila(cy, "Longitud", long_serp)
-        cy += fila(cy, "Dirección", mapa_dir.get(ultima_dir, "—"))
-        cy += fila(cy, "Muertes", self._muertes_gui, color_rojo)
-        cy += fila(cy, "Victorias", self._victorias_gui, color_verde)
-        cy += 4
-
-        superficie.blit(f_eti.render("Hambre", True, color_apagado), (x + margen_mini, cy))
-        badge_s = f_mini.render(badge_hambre, True, color_hambre)
-        superficie.blit(badge_s, (x + w - badge_s.get_width() - margen_mini, cy))
-        cy += f_eti.size("Hambre")[1] + 4
-        barra_progreso(superficie, x + margen_mini, cy, w - margen_mini * 2, 12, timer_comida, self.max_pasos_hambre, color_hambre)
-
-    # Implementación interna del loop Pygame
     def _impl_bucle_principal(self, estado_evo):
         ruta_recursos = pathlib.Path(__file__).parent.parent.parent / 'data'
 
         pygame.init()
-        pygame.display.set_caption('Snake NEAT — Entrenamiento')
+        pygame.display.set_caption('Snake NEAT')
 
         SW, SH = 1280, 720
         ventana = pygame.display.set_mode((SW, SH))
-        reloj = pygame.time.Clock()
+        reloj   = pygame.time.Clock()
 
-        ruta_tema = ruta_recursos / 'gui_theme.json'
-        gestor_ui = pygame_gui.UIManager((SW, SH), theme_path = str(ruta_tema)) if ruta_tema.exists() else pygame_gui.UIManager((SW, SH))
+        ruta_raleway = ruta_recursos / 'fonts' / 'Raleway-Regular.ttf'
+
+        def _f(size, bold = False, raleway = False):
+            if raleway and ruta_raleway.exists():
+                return pygame.font.Font(str(ruta_raleway), size)
+            return pygame.font.SysFont('Consolas', size, bold = bold)
 
         fuentes = {
-            'title': pygame.font.SysFont('Consolas', 28, bold = True),
-            'sub':   pygame.font.SysFont('Consolas', 10),
-            'hdr':   pygame.font.SysFont('Consolas', 10, bold = True),
-            'lbl':   pygame.font.SysFont('Consolas', 11),
-            'val':   pygame.font.SysFont('Consolas', 12, bold = True),
-            'tiny':  pygame.font.SysFont('Consolas', 10),
+            'titulo':     _f(24, bold = True),
+            'num_xl':     _f(52, bold = True),
+            'num_header': _f(18, bold = True),
+            'num_sm':     _f(18, bold = True),
+            'hdr':        _f(10, bold = True, raleway = True),
+            'lbl':        _f(11, raleway = True),
+            'val':        _f(12, bold = True),
+            'tiny':       _f(10),
         }
 
-        TITULO_H = 66
-        panel_y = TITULO_H + 8
-        panel_h = SH - panel_y - margen
+        HEADER_H  = 56
+        panel_y   = HEADER_H + 4
+        panel_h   = SH - panel_y - margen
         ancho_izq = int(SW * 0.44) - margen
         ancho_der = SW - ancho_izq - margen * 3
 
-        panel_juego = pygame.Rect(margen, panel_y, ancho_izq, panel_h)
+        panel_juego = pygame.Rect(margen,                  panel_y, ancho_izq, panel_h)
         panel_stats = pygame.Rect(ancho_izq + margen * 2, panel_y, ancho_der, panel_h)
 
-        gs = min(panel_juego.width - 48, panel_juego.height - 48)
+        gs      = min(panel_juego.width - 32, panel_juego.height - 32)
         gs_rect = pygame.Rect(0, 0, gs, gs)
         gs_rect.center = panel_juego.center
         gs_surf = pygame.Surface((gs, gs))
 
-        BTN_H = 36
-        btn_y = panel_stats.bottom - BTN_H - 12
-        btn_red = pygame_gui.elements.UIButton(
-            relative_rect = pygame.Rect(panel_stats.x + margen, btn_y, panel_stats.width - margen * 2, BTN_H),
-            text = 'Ver Red Neuronal',
-            manager = gestor_ui,
-            object_id = '#net_btn',
-        )
-
-        # Estado inicial de la simulación GUI
         juego, entradas_temporales = self._nuevo_juego()
-        datos_serp = juego[2]
-        ultima_dir = (0, 0)
-        timer_comida = 0
-        visual_score = 0
-        seg_por_paso = 0.02 # 50 pasos visuales por segundo
+        datos_serp     = juego[2]
+        ultima_dir     = (0, 0)
+        timer_comida   = 0
+        visual_score   = 0
+        seg_por_paso   = 0.02
         max_pasos_frame = 4
-        acumulador = 0.0
-        genoma_visual = None
-        genoma_pendiente = None
+        acumulador     = 0.0
+        genoma_visual  = None
         ultima_gen_mostrada = self.generacion
 
-        # Loop principal
         while estado_evo['ejecutando']:
             delta = reloj.tick(self.fps_limite) / 1000.0
 
             if self.generacion != ultima_gen_mostrada:
                 ultima_gen_mostrada = self.generacion
-                genoma_pendiente = self.mejor_genoma
 
-            # Procesar eventos
             for evento in pygame.event.get():
                 if evento.type == pygame.QUIT:
                     estado_evo['ejecutando'] = False
 
-                if evento.type == pygame_gui.UI_BUTTON_PRESSED:
-                    if evento.ui_element == btn_red:
-                        if self.mejor_genoma:
-                            try:
-                                print("Generando diagrama de red neuronal...")
-                                dibujar_red(self.config, self.mejor_genoma, mostrar = True, archivo = 'Digraph')
-                                print("Diagrama guardado: Digraph.svg")
-                            except Exception as e:
-                                print(f"Error al generar diagrama: {e}")
-                        else:
-                            print("Aún no hay un genoma disponible.")
+            with self._lock_genoma:
+                genoma_actual = self.mejor_genoma
 
-                gestor_ui.process_events(evento)
-
-            # Asignar primer genoma al estar disponible
-            if self.mejor_genoma and genoma_visual is None:
-                genoma_visual = self.mejor_genoma
+            if genoma_actual and genoma_visual is None:
+                genoma_visual = genoma_actual
                 juego, entradas_temporales = self._nuevo_juego()
-                datos_serp = juego[2]
-                ultima_dir = (0, 0)
+                datos_serp   = juego[2]
+                ultima_dir   = (0, 0)
                 timer_comida = 0
                 visual_score = 0
-                acumulador = 0.0
+                acumulador   = 0.0
 
             acumulador += delta
-            acumulador = min(acumulador, seg_por_paso * max_pasos_frame)
-
+            acumulador  = min(acumulador, seg_por_paso * max_pasos_frame)
             pasos_hechos = 0
 
-            while self.mejor_genoma and acumulador >= seg_por_paso and pasos_hechos < max_pasos_frame:
-                acumulador -= seg_por_paso
+            while genoma_actual and acumulador >= seg_por_paso and pasos_hechos < max_pasos_frame:
+                acumulador   -= seg_por_paso
                 pasos_hechos += 1
 
                 entradas = obtener_entradas(
                     juego,
-                    n_rayos = self.num_rayos,
-                    incluir_long_serp = self.incluir_long_serp,
+                    n_rayos            = self.num_rayos,
+                    incluir_long_serp  = self.incluir_long_serp,
                     incluir_dist_pared = self.incluir_dist_pared,
+                    dir_rotativas      = self.dir_rotativas,
+                    ultima_dir         = ultima_dir,
                 )
 
                 if self.incluir_ultima_dir:
@@ -390,11 +477,11 @@ class ReportadorPygame(neat.reporting.BaseReporter):
                 entradas_temporales.append(entradas)
 
                 if genoma_visual is not self._genoma_cache:
-                    self._red_cache = neat.nn.FeedForwardNetwork.create(genoma_visual, self.config)
+                    self._red_cache    = neat.nn.FeedForwardNetwork.create(genoma_visual, self.config)
                     self._genoma_cache = genoma_visual
 
-                salidas = self._red_cache.activate(numpy.array(entradas_temporales).flatten())
-                direccion = elegir_direccion(salidas, ultima_dir)
+                salidas    = self._red_cache.activate(numpy.array(entradas_temporales).flatten())
+                direccion  = elegir_direccion(salidas, ultima_dir, juego[0], juego[2][-1])
                 ultima_dir = direccion
 
                 datos_serp, muerto, pos_comida, comio = move_snake(juego[0], juego[2], direccion, juego[1])
@@ -402,17 +489,15 @@ class ReportadorPygame(neat.reporting.BaseReporter):
 
                 if comio:
                     visual_score += 1
-                    timer_comida = 0
-
+                    timer_comida  = 0
                     if visual_score > self._mejor_score_gui:
                         self._mejor_score_gui = visual_score
                 elif not muerto:
                     timer_comida += 1
 
-                if timer_comida > self.max_pasos_hambre:
+                if timer_comida >= self.max_pasos_hambre:
                     muerto = True
 
-                # Victoria: tablero completamente lleno
                 if pos_comida == (-1, -1):
                     self._victorias_gui += 1
                     muerto = True
@@ -422,53 +507,54 @@ class ReportadorPygame(neat.reporting.BaseReporter):
                         self._muertes_gui += 1
 
                     juego, entradas_temporales = self._nuevo_juego()
-                    datos_serp = juego[2]
-                    ultima_dir = (0, 0)
+                    datos_serp   = juego[2]
+                    ultima_dir   = (0, 0)
                     timer_comida = 0
                     visual_score = 0
-                    genoma_visual = self.mejor_genoma
-                    genoma_pendiente = None
-                    acumulador = 0.0
+                    with self._lock_genoma:
+                        genoma_visual = self.mejor_genoma
+                    acumulador   = 0.0
 
                     break
 
-            # Renderizado
+            # RENDERIZADO
             ventana.fill(color_fondo)
 
-            # Barra de título
-            titulo_s = fuentes['title'].render("Snake NEAT", True, color_acento)
-            sub_s = fuentes['sub'].render(
-                f"[ RAYS:{self.num_rayos}  INPUTS:{len(self.config.genome_config.input_keys)}  POP:{self.config.pop_size} ]",
-                True, color_apagado,
-            )
-            ventana.blit(titulo_s, (SW // 2 - titulo_s.get_width() // 2, 8))
-            ventana.blit(sub_s, (SW // 2 - sub_s.get_width() // 2, 46))
-            pygame.draw.line(ventana, color_borde, (margen, TITULO_H - 4), (SW - margen, TITULO_H - 4), 2)
-            pygame.draw.line(ventana, color_tenue, (margen, TITULO_H + 1), (SW - margen, TITULO_H + 1), 1)
+            for gy in range(0, SH, 40):
+                pygame.draw.line(ventana, color_sep, (0, gy), (SW, gy), 1)
+            for gx in range(0, SW, 40):
+                pygame.draw.line(ventana, color_sep, (gx, 0), (gx, SH), 1)
 
-            # Panel izquierdo: tablero de juego
-            rect_redondeado(ventana, color_panel, panel_juego, borde = color_borde)
-            lbl_estado = fuentes['hdr'].render(
-                "Evaluando..." if estado_evo.get('evaluando', False) else "En vivo",
-                True,
-                color_amarillo if estado_evo.get('evaluando', False) else color_acento,
-            )
-            ventana.blit(lbl_estado, (panel_juego.x + 10, panel_juego.y + 10))
+            self._dibujar_header(ventana, fuentes, reloj.get_fps(), estado_evo)
+
+            rect_neon(ventana, color_panel, panel_juego, color_borde)
+
+            franja_h = panel_juego.bottom - gs_rect.bottom - 8
+            if franja_h > 10:
+                grilla_synthwave(
+                    ventana,
+                    pygame.Rect(panel_juego.x + 8, gs_rect.bottom + 8, panel_juego.width - 16, franja_h - 8),
+                    color_sep,
+                )
+
             gs_surf.fill((0, 0, 0))
             render(gs_surf, juego[0], color_map_input = mapa_colores_tablero)
             ventana.blit(gs_surf, gs_rect)
 
-            # Panel derecho: estadísticas
-            rect_redondeado(ventana, color_panel, panel_stats, borde = color_borde)
-            self._dibujar_panel_stats(ventana, panel_stats, fuentes, timer_comida, visual_score, len(datos_serp), ultima_dir, reloj)
+            lbl_estado = fuentes['hdr'].render(
+                ">> EVALUANDO" if estado_evo.get('evaluando', False) else ">> EN VIVO",
+                True,
+                color_oro if estado_evo.get('evaluando', False) else color_cian,
+            )
+            ventana.blit(lbl_estado, (panel_juego.x + 10, panel_juego.y + 10))
 
-            gestor_ui.update(delta)
-            gestor_ui.draw_ui(ventana)
+            rect_neon(ventana, color_panel, panel_stats, color_borde)
+            self._dibujar_panel_stats(ventana, panel_stats, fuentes, timer_comida, visual_score, len(datos_serp), ultima_dir)
+
             pygame.display.flip()
 
         pygame.quit()
 
-    # Inicia el loop principal de Pygame; debe llamarse desde el hilo principal
     def bucle_principal(self, estado_evo):
         try:
             self._impl_bucle_principal(estado_evo)
